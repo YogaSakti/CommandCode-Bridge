@@ -1,0 +1,6 @@
+{"type":"reasoning-start","id":"rsn-0"}
+{"type":"reasoning-delta","id":"rsn-0","text":"think"}
+{"type":"reasoning-end","id":"rsn-0"}
+{"type":"text-delta","id":"txt-0","text":"answer"}
+{"type":"finish-step","finishReason":"length","usage":{"inputTokens":4,"outputTokens":7,"totalTokens":11,"outputTokenDetails":{"reasoningTokens":3}}}
+{"type":"finish"}

@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>CommandCode Bridge Accounts</title>
+  <style>
+    :root{color-scheme:light dark;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:Canvas;color:CanvasText}*{box-sizing:border-box}body{margin:0}main{width:min(960px,100%);margin:auto;padding:24px}h1{margin:0 0 8px;font-size:1.65rem}p{line-height:1.5;max-width:65ch}section{border:1px solid color-mix(in srgb,CanvasText 18%,transparent);border-radius:12px;padding:18px;margin:18px 0}form,label{display:grid;gap:8px}form{gap:14px}label{font-weight:600}input,select,button{min-height:44px;font:inherit;padding:10px 12px;border-radius:8px;border:1px solid color-mix(in srgb,CanvasText 28%,transparent)}button{cursor:pointer;font-weight:650}button:disabled{cursor:not-allowed;opacity:.6}.actions{display:flex;flex-wrap:wrap;gap:10px;align-items:center}.secondary{background:transparent}.status{min-height:1.5em;white-space:pre-wrap}.error{color:#b42318}.key-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}.help{margin:0;font-size:.9rem;font-weight:400}table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}th,td{padding:10px;text-align:left;border-bottom:1px solid color-mix(in srgb,CanvasText 14%,transparent)}td label{font-size:.85rem}td select,td input{width:100%;min-width:8rem}:focus-visible{outline:2px solid Highlight;outline-offset:2px}@media(max-width:640px){main{padding:16px}.key-row{grid-template-columns:1fr}table{display:block;overflow-x:auto}}
+  </style>
+</head>
+<body>
+<main>
+  <h1>CommandCode Bridge Accounts</h1>
+  <p>Validate and add a <code>user_...</code> key. Keys go only to CPA's authenticated Management API and are never displayed again.</p>
+  <section aria-labelledby="auth-heading">
+    <h2 id="auth-heading">Management authentication</h2>
+    <p id="auth-help">The Management Center session is reused when available. Otherwise enter the management password for this tab.</p>
+    <label for="sessionKey">Management password<input id="sessionKey" name="sessionKey" type="password" autocomplete="current-password" aria-describedby="auth-help"></label>
+  </section>
+  <section aria-labelledby="add-heading">
+    <h2 id="add-heading">Add account</h2>
+    <form id="account-form">
+      <div class="key-row">
+        <label for="apiKey">CommandCode API key<input id="apiKey" name="api_key" type="password" required autocomplete="off" placeholder="user_..."></label>
+        <label for="model">Validation model<input id="model" name="model" autocomplete="off" placeholder="Use bundled default"></label>
+      </div>
+      <div class="key-row">
+        <label for="label">Label<input id="label" name="label" autocomplete="off" maxlength="120"></label>
+        <label for="plan">Plan<select id="plan" name="plan" aria-describedby="plan-help"><option value="unspecified">Unspecified (Round-robin)</option><option value="go">Go (priority 7)</option><option value="goat">Goat (priority 6)</option><option value="pro">Pro (priority 5)</option><option value="team">Team (priority 4)</option><option value="max-10x">Max 10x (priority 3)</option><option value="max-20x">Max 20x (priority 2)</option><option value="provider">Provider (priority 1)</option></select><span id="plan-help" class="help">Choose the default routing priority. Equal priorities use Round-robin; lower priorities use Fill-first.</span></label>
+      </div>
+      <label for="priorityOverride">Priority override (optional)<input id="priorityOverride" name="priority_override" type="number" min="1" max="10" step="1" inputmode="numeric" aria-describedby="priority-help"><span id="priority-help" class="help">Set 1–10 to replace the plan priority for this account.</span></label>
+      <div class="actions"><button type="submit">Validate and add</button><button id="validate" class="secondary" type="button">Validate only</button><button id="importLocal" class="secondary" type="button">Import local CLI credential</button></div>
+    </form>
+    <p id="status" class="status" role="status" aria-live="polite"></p>
+  </section>
+  <section aria-labelledby="accounts-heading">
+    <div class="actions"><h2 id="accounts-heading">Accounts</h2><button id="refresh" class="secondary" type="button">Refresh</button></div>
+    <table><thead><tr><th>File</th><th>Label</th><th>Plan</th><th>Override</th><th>Effective priority</th><th>Status</th><th>Action</th></tr></thead><tbody id="accounts"><tr><td colspan="7">Loading…</td></tr></tbody></table>
+    <p>Delete or disable credentials from <a href="/management.html#/auth-files" target="_top">CPA Auth Files</a>.</p>
+  </section>
+</main>
+<script>
+(()=>{'use strict';
+const AUTH_STORAGE_KEY='cli-proxy-auth',PREFIX='enc::v1::',SALT='cli-proxy-api-webui::secure-storage';
+const routes={accounts:'/v0/management/plugins/commandcode-bridge/accounts',importLocal:'/v0/management/plugins/commandcode-bridge/import-local',validate:'/v0/management/plugins/commandcode-bridge/validate',fields:'/v0/management/auth-files/fields'};
+const PLAN_PRIORITIES={
+  unspecified:0,go:7,goat:6,pro:5,team:4,
+  'max-10x':3,'max-20x':2,provider:1
+};
+const status=document.getElementById('status'),sessionKey=document.getElementById('sessionKey'),accounts=document.getElementById('accounts');
+function xorDecode(payload){if(!payload||!payload.startsWith(PREFIX))return payload;const key=new TextEncoder().encode(`${SALT}|${location.host}|${navigator.userAgent}`),binary=atob(payload.slice(PREFIX.length)),bytes=new Uint8Array(binary.length);for(let i=0;i<binary.length;i++)bytes[i]=binary.charCodeAt(i)^key[i%key.length];return new TextDecoder().decode(bytes)}
+function parseStored(value){if(!value)return null;try{return JSON.parse(xorDecode(value))}catch(_){return null}}
+function rememberedManagementKey(){const auth=parseStored(localStorage.getItem(AUTH_STORAGE_KEY)),state=auth&&auth.state?auth.state:auth;if(state&&typeof state.managementKey==='string'&&state.managementKey)return state.managementKey;const legacy=parseStored(localStorage.getItem('managementKey'));return typeof legacy==='string'?legacy:''}
+function managementKey(){return sessionKey.value.trim()||rememberedManagementKey()}
+async function api(path,method='GET',body){const key=managementKey();if(!key)throw new Error('Management password required.');const response=await fetch(path,{method,headers:{'Authorization':`Bearer ${key}`,'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});let payload={};try{payload=await response.json()}catch(_){}if(!response.ok)throw new Error(payload.error||`Request failed (${response.status})`);return payload}
+function setStatus(message,failed=false){status.textContent=message;status.className=failed?'status error':'status'}
+function overrideValue(input){
+  const raw=input.value.trim();
+  if(raw==='')return null;
+  const value=Number(raw);
+  if(!Number.isInteger(value)||value<1||value>10)throw new Error('Priority override must be an integer from 1 to 10.');
+  return value;
+}
+function routingBody(planInput,overrideInput){
+  const plan=planInput.value;
+  if(!(plan in PLAN_PRIORITIES))throw new Error('Select a valid plan.');
+  const priority_override=overrideValue(overrideInput);
+  return{plan,priority_override,priority:priority_override??PLAN_PRIORITIES[plan]};
+}
+function enrollmentBody(){const routing=routingBody(document.getElementById('plan'),document.getElementById('priorityOverride'));return{api_key:document.getElementById('apiKey').value.trim(),label:document.getElementById('label').value.trim(),model:document.getElementById('model').value.trim(),plan:routing.plan,priority_override:routing.priority_override}}
+function stateRow(message){accounts.textContent='';const row=accounts.insertRow(),cell=row.insertCell();cell.colSpan=7;cell.textContent=message}
+function planSelect(account){const select=document.createElement('select');select.name='plan';select.setAttribute('aria-label',`Plan for ${account.filename}`);for(const plan of Object.keys(PLAN_PRIORITIES)){const option=document.createElement('option');option.value=plan;option.textContent=plan;select.append(option)}select.value=account.plan in PLAN_PRIORITIES?account.plan:'unspecified';return select}
+function overrideInput(account){const input=document.createElement('input');input.name='priority_override';input.type='number';input.min='1';input.max='10';input.step='1';input.inputMode='numeric';input.setAttribute('aria-label',`Priority override for ${account.filename}`);input.value=account.priority_override==null?'':String(account.priority_override);return input}
+function renderAccount(account){const row=accounts.insertRow();row.insertCell().textContent=account.filename||'';row.insertCell().textContent=account.label||'';const planCell=row.insertCell(),overrideCell=row.insertCell();planCell.textContent=account.plan||'unspecified';overrideCell.textContent=account.priority_override==null?'Default':String(account.priority_override);row.insertCell().textContent=account.effective_priority==null?'':String(account.effective_priority);row.insertCell().textContent=account.disabled?'disabled':account.unavailable?'unavailable':account.status||'available';const actionCell=row.insertCell(),button=document.createElement('button');button.type='button';button.className='secondary';if(!account.editable){button.textContent='Unavailable';button.disabled=true;button.setAttribute('aria-label',`Routing unavailable for ${account.filename}`);actionCell.append(button);return}button.textContent='Edit';button.setAttribute('aria-label',`Edit routing for ${account.filename}`);button.onclick=()=>{const select=planSelect(account),input=overrideInput(account);planCell.textContent='';overrideCell.textContent='';planCell.append(select);overrideCell.append(input);button.textContent='Save';button.setAttribute('aria-label',`Save routing for ${account.filename}`);button.onclick=async()=>{setStatus('Working…');button.disabled=true;try{const patch=routingBody(select,input),method='PATCH';await api('/v0/management/auth-files/fields',method,{name:account.filename,plan:patch.plan,priority_override:patch.priority_override,priority:patch.priority});setStatus('Account routing updated.');await loadAccounts()}catch(error){setStatus(error.message,true);button.disabled=false}}};actionCell.append(button)}
+async function loadAccounts(){stateRow('Loading…');try{const payload=await api(routes.accounts),rows=Array.isArray(payload.accounts)?payload.accounts:[];accounts.textContent='';if(!rows.length){stateRow('No CommandCode Bridge accounts enrolled.');return}rows.forEach(renderAccount)}catch(error){stateRow(error.message)}}
+async function submit(path,body,success){setStatus('Working…');try{await api(path,'POST',body);document.getElementById('apiKey').value='';setStatus(success);await loadAccounts()}catch(error){setStatus(error.message,true)}}
+document.getElementById('account-form').addEventListener('submit',event=>{event.preventDefault();try{void submit(routes.accounts,enrollmentBody(),'Account added.')}catch(error){setStatus(error.message,true)}});
+document.getElementById('validate').addEventListener('click',()=>void submit(routes.validate,{api_key:document.getElementById('apiKey').value.trim(),label:document.getElementById('label').value.trim(),model:document.getElementById('model').value.trim()},'Credential is valid.'));
+document.getElementById('importLocal').addEventListener('click',()=>{try{const routing=routingBody(document.getElementById('plan'),document.getElementById('priorityOverride'));void submit(routes.importLocal,{plan:routing.plan,priority_override:routing.priority_override},'Local CLI credential imported.')}catch(error){setStatus(error.message,true)}});
+document.getElementById('refresh').addEventListener('click',()=>void loadAccounts());sessionKey.addEventListener('change',()=>void loadAccounts());void loadAccounts();
+})();
+</script>
+</body>
+</html>

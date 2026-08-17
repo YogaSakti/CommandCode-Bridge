@@ -1,0 +1,4 @@
+{"type":"text-delta","id":"txt-0","text":"Hel"}
+{"type":"text-delta","id":"txt-0","text":"lo"}
+{"type":"finish-step","finishReason":"stop","usage":{"inputTokens":10,"outputTokens":5,"totalTokens":15,"inputTokenDetails":{"cacheReadTokens":2}}}
+{"type":"finish","finishReason":"stop","totalUsage":{"inputTokens":10,"outputTokens":5,"totalTokens":15,"inputTokenDetails":{"cacheReadTokens":2}}}

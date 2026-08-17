@@ -1,0 +1,133 @@
+name: Release assets
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+env:
+  GO_VERSION: '1.26.0'
+
+jobs:
+  hosted:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: darwin-amd64
+            runner: macos-15-intel
+            goos: darwin
+            ext: dylib
+          - target: darwin-arm64
+            runner: macos-15
+            goos: darwin
+            ext: dylib
+          - target: windows-amd64
+            runner: windows-latest
+            goos: windows
+            ext: dll
+          - target: windows-arm64
+            runner: windows-11-arm
+            goos: windows
+            ext: dll
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build and package
+        shell: bash
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          version=${VERSION#v}
+          ./scripts/build.sh "$version" ./dist
+          ./scripts/package.sh "$version" "./dist/commandcode-bridge.${{ matrix.ext }}" ./dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: dist/commandcode-bridge_*.zip
+          if-no-files-found: error
+
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-amd64
+            runner: ubuntu-latest
+            goarch: amd64
+            image: quay.io/pypa/manylinux2014_x86_64
+          - target: linux-arm64
+            runner: ubuntu-24.04-arm
+            goarch: arm64
+            image: quay.io/pypa/manylinux2014_aarch64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build GLIBC 2.17-compatible library
+        env:
+          GOARCH: ${{ matrix.goarch }}
+          MANYLINUX_IMAGE: ${{ matrix.image }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          version=${VERSION#v}
+          docker run --rm -v "$PWD:/src" -w /src \
+            -e GO_VERSION -e GOARCH -e VERSION="$version" "$MANYLINUX_IMAGE" \
+            bash -euo pipefail -c '
+              archive="go${GO_VERSION}.linux-${GOARCH}.tar.gz"
+              curl -fsSL "https://go.dev/dl/${archive}" -o "/tmp/${archive}"
+              rm -rf /usr/local/go && tar -C /usr/local -xzf "/tmp/${archive}"
+              export PATH=/usr/local/go/bin:$PATH
+              ./scripts/build.sh "$VERSION" ./dist
+              ./scripts/package.sh "$VERSION" ./dist/commandcode-bridge.so ./dist
+              versions=$(readelf --version-info ./dist/commandcode-bridge.so | sed -n "s/.*Name: GLIBC_\([0-9.]*\).*/\1/p" | sort -Vu)
+              if [ -n "$versions" ]; then
+                max=$(printf "%s\n" "$versions" | sort -V | tail -n 1)
+                [ "$(printf "2.17\n%s\n" "$max" | sort -V | tail -n 1)" = "2.17" ]
+              fi
+            '
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: dist/commandcode-bridge_*.zip
+          if-no-files-found: error
+
+  freebsd:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: vmactions/freebsd-vm@v1
+        with:
+          usesh: true
+          prepare: pkg install -y go zip
+          run: |
+            version=${GITHUB_REF_NAME#v}
+            ./scripts/build.sh "$version" ./dist
+            ./scripts/package.sh "$version" ./dist/commandcode-bridge.so ./dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: freebsd-amd64
+          path: dist/commandcode-bridge_*.zip
+          if-no-files-found: error
+
+  publish:
+    needs: [hosted, linux, freebsd]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Generate checksums
+        run: |
+          cd artifacts
+          sha256sum commandcode-bridge_*.zip | sort -k2 > checksums.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/commandcode-bridge_*.zip
+            artifacts/checksums.txt

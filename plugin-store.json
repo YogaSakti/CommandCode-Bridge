@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "plugins": [{
+    "id": "commandcode-bridge",
+    "name": "CommandCode Bridge",
+    "description": "Unofficial CLIProxyAPI bridge for using your own Command Code account through OpenAI-compatible APIs.",
+    "author": "YogaSakti",
+    "repository": "https://github.com/YogaSakti/CommandCode-Bridge",
+    "homepage": "https://github.com/YogaSakti/CommandCode-Bridge",
+    "license": "MIT",
+    "tags": ["cliproxyapi", "commandcode", "bridge", "provider"]
+  }]
+}
