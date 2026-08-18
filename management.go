@@ -16,14 +16,18 @@ import (
 )
 
 const (
-	managementAccountsPath     = "/plugins/commandcode-bridge/accounts"
-	managementImportPath       = "/plugins/commandcode-bridge/import-local"
-	managementValidatePath     = "/plugins/commandcode-bridge/validate"
-	resourceAccountsPath       = "/accounts"
-	managementAccountsFullPath = "/v0/management" + managementAccountsPath
-	resourceAccountsFullPath   = "/v0/resource/plugins/commandcode-bridge" + resourceAccountsPath
-	maxManagementBodyBytes     = 64 * 1024
-	accountsPageCSP            = "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:"
+	managementAccountsPath        = "/plugins/commandcode-bridge/accounts"
+	managementModelsPath          = managementAccountsPath + "/models"
+	managementModelsFetchPath     = managementModelsPath + "/fetch"
+	managementImportPath          = "/plugins/commandcode-bridge/import-local"
+	managementValidatePath        = "/plugins/commandcode-bridge/validate"
+	resourceAccountsPath          = "/accounts"
+	managementAccountsFullPath    = "/v0/management" + managementAccountsPath
+	managementModelsFullPath      = "/v0/management" + managementModelsPath
+	managementModelsFetchFullPath = "/v0/management" + managementModelsFetchPath
+	resourceAccountsFullPath      = "/v0/resource/plugins/commandcode-bridge" + resourceAccountsPath
+	maxManagementBodyBytes        = 64 * 1024
+	accountsPageCSP               = "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:"
 )
 
 var (
@@ -54,16 +58,17 @@ type routingRequest struct {
 }
 
 type managementAccount struct {
-	Filename          string `json:"filename"`
-	Fingerprint       string `json:"fingerprint"`
-	Label             string `json:"label,omitempty"`
-	Plan              string `json:"plan"`
-	PriorityOverride  *int   `json:"priority_override"`
-	EffectivePriority int    `json:"effective_priority"`
-	Status            string `json:"status,omitempty"`
-	Disabled          bool   `json:"disabled,omitempty"`
-	Unavailable       bool   `json:"unavailable,omitempty"`
-	Editable          bool   `json:"editable"`
+	Filename          string            `json:"filename"`
+	Fingerprint       string            `json:"fingerprint"`
+	Label             string            `json:"label,omitempty"`
+	Plan              string            `json:"plan"`
+	PriorityOverride  *int              `json:"priority_override"`
+	EffectivePriority int               `json:"effective_priority"`
+	Status            string            `json:"status,omitempty"`
+	Disabled          bool              `json:"disabled,omitempty"`
+	Unavailable       bool              `json:"unavailable,omitempty"`
+	Models            []credentialModel `json:"models,omitempty"`
+	Editable          bool              `json:"editable"`
 }
 
 type enrollmentRequest struct {
@@ -73,11 +78,18 @@ type enrollmentRequest struct {
 	routingRequest
 }
 
+type modelsRequest struct {
+	Fingerprint string            `json:"fingerprint"`
+	Models      []credentialModel `json:"models"`
+}
+
 func handleManagementRegister() ([]byte, error) {
 	return okEnvelope(managementRegistrationResponse{
 		Routes: []pluginapi.ManagementRoute{
 			{Method: http.MethodGet, Path: managementAccountsPath, Description: "List redacted CommandCode accounts"},
 			{Method: http.MethodPost, Path: managementAccountsPath, Description: "Validate and enroll a CommandCode API key"},
+			{Method: http.MethodPut, Path: managementModelsPath, Description: "Save an account model set"},
+			{Method: http.MethodPost, Path: managementModelsFetchPath, Description: "Fetch an account model catalog"},
 			{Method: http.MethodPost, Path: managementImportPath, Description: "Import and validate the local CommandCode CLI credential"},
 			{Method: http.MethodPost, Path: managementValidatePath, Description: "Validate a CommandCode API key without saving it"},
 		},
@@ -103,6 +115,10 @@ func handleManagement(raw []byte) ([]byte, error) {
 		response = listManagementAccounts(request.HostCallbackID)
 	case method == http.MethodPost && (path == managementAccountsPath || path == managementAccountsFullPath):
 		response = enrollManagementAccount(request.HostCallbackID, request.Body, true)
+	case method == http.MethodPut && (path == managementModelsPath || path == managementModelsFullPath):
+		response = handleModelsSave(request.HostCallbackID, request.Body)
+	case method == http.MethodPost && (path == managementModelsFetchPath || path == managementModelsFetchFullPath):
+		response = handleModelsFetch(request.HostCallbackID, request.Body)
 	case method == http.MethodPost && (path == managementValidatePath || path == "/v0/management"+managementValidatePath):
 		response = enrollManagementAccount(request.HostCallbackID, request.Body, false)
 	case method == http.MethodPost && (path == managementImportPath || path == "/v0/management"+managementImportPath):
@@ -164,6 +180,7 @@ func listManagementAccounts(hostCallbackID string) pluginapi.ManagementResponse 
 					account.Plan = value.Plan
 					account.PriorityOverride = value.PriorityOverride
 					account.EffectivePriority = value.Priority
+					account.Models = value.Models
 					account.Editable = true
 				}
 			}
@@ -303,6 +320,104 @@ func getHostAccount(authIndex string) (pluginapi.HostAuthGetResponse, error) {
 	var response pluginapi.HostAuthGetResponse
 	err := hostCall(pluginabi.MethodHostAuthGet, pluginapi.HostAuthGetRequest{AuthIndex: authIndex}, &response)
 	return response, err
+}
+
+func handleModelsSave(hostCallbackID string, body []byte) pluginapi.ManagementResponse {
+	var request modelsRequest
+	if err := json.Unmarshal(body, &request); err != nil {
+		return managementJSON(http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+	}
+	file, physical, value, status := resolveManagementAccount(hostCallbackID, request.Fingerprint)
+	if status != nil {
+		return *status
+	}
+	value.Models = request.Models
+	raw, _ := json.Marshal(value)
+	if _, err := normalizeCredential(raw); err != nil {
+		return managementJSON(http.StatusBadRequest, map[string]string{"error": errInvalidModelSet.Error()})
+	}
+	var source map[string]json.RawMessage
+	if err := json.Unmarshal(physical.JSON, &source); err != nil {
+		return managementJSON(http.StatusBadGateway, map[string]string{"error": "unable to read account"})
+	}
+	models, _ := json.Marshal(request.Models)
+	source["models"] = models
+	storage, err := json.Marshal(source)
+	if err != nil {
+		return managementJSON(http.StatusInternalServerError, map[string]string{"error": "unable to save account"})
+	}
+	var saved pluginapi.HostAuthSaveResponse
+	if err := hostCall(pluginabi.MethodHostAuthSave, pluginapi.HostAuthSaveRequest{Name: filepath.Base(file.Name), JSON: storage}, &saved); err != nil {
+		return managementJSON(http.StatusBadGateway, map[string]string{"error": "unable to save account"})
+	}
+	return managementJSON(http.StatusOK, map[string]any{"models": request.Models})
+}
+
+func handleModelsFetch(hostCallbackID string, body []byte) pluginapi.ManagementResponse {
+	var request modelsRequest
+	if err := json.Unmarshal(body, &request); err != nil {
+		return managementJSON(http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+	}
+	_, _, value, status := resolveManagementAccount(hostCallbackID, request.Fingerprint)
+	if status != nil {
+		return *status
+	}
+	var response pluginapi.HTTPResponse
+	if err := hostCall(pluginabi.MethodHostHTTPDo, hostHTTPRequest{
+		HostCallbackID: hostCallbackID,
+		Method:         http.MethodGet,
+		URL:            modelCatalogURL,
+		Headers: http.Header{
+			"Accept":        []string{"application/json"},
+			"Authorization": []string{"Bearer " + value.APIKey},
+		},
+	}, &response); err != nil || response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return managementJSON(http.StatusBadGateway, map[string]string{"error": "unable to fetch model catalog"})
+	}
+	var catalog catalogResponse
+	if err := json.Unmarshal(response.Body, &catalog); err != nil {
+		return managementJSON(http.StatusBadGateway, map[string]string{"error": "unable to fetch model catalog"})
+	}
+	models := make([]map[string]string, 0, len(catalog.Data))
+	for _, model := range catalog.Data {
+		if id := strings.TrimSpace(model.ID); id != "" {
+			models = append(models, map[string]string{"id": id, "name": strings.TrimSpace(model.Name)})
+		}
+	}
+	return managementJSON(http.StatusOK, map[string]any{"models": models})
+}
+
+func resolveManagementAccount(hostCallbackID, accountFingerprint string) (pluginapi.HostAuthFileEntry, pluginapi.HostAuthGetResponse, credential, *pluginapi.ManagementResponse) {
+	accountFingerprint = strings.TrimSpace(accountFingerprint)
+	if accountFingerprint == "" {
+		response := managementJSON(http.StatusBadRequest, map[string]string{"error": "account fingerprint is required"})
+		return pluginapi.HostAuthFileEntry{}, pluginapi.HostAuthGetResponse{}, credential{}, &response
+	}
+	files, err := listHostAccounts(hostCallbackID)
+	if err != nil {
+		response := managementJSON(http.StatusBadGateway, map[string]string{"error": "unable to list accounts"})
+		return pluginapi.HostAuthFileEntry{}, pluginapi.HostAuthGetResponse{}, credential{}, &response
+	}
+	for _, file := range files {
+		if !isCommandCodeBridgeAccount(file) || file.RuntimeOnly || fingerprintFromFilename(file.Name) != accountFingerprint {
+			continue
+		}
+		authIndex := strings.TrimSpace(file.AuthIndex)
+		if authIndex == "" {
+			continue
+		}
+		physical, err := getHostAccount(authIndex)
+		if err != nil || filepath.Base(strings.TrimSpace(physical.Name)) != filepath.Base(strings.TrimSpace(file.Name)) {
+			break
+		}
+		value, err := normalizeCredential(physical.JSON)
+		if err != nil {
+			break
+		}
+		return file, physical, value, nil
+	}
+	response := managementJSON(http.StatusNotFound, map[string]string{"error": "account not found"})
+	return pluginapi.HostAuthFileEntry{}, pluginapi.HostAuthGetResponse{}, credential{}, &response
 }
 
 func listHostAccounts(hostCallbackID string) ([]pluginapi.HostAuthFileEntry, error) {

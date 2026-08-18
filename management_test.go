@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -76,10 +77,12 @@ func TestManagementRegisterDeclaresExactBoundary(t *testing.T) {
 		t.Fatalf("resources = %#v", response.Resources)
 	}
 	wantRoutes := map[string]bool{
-		"GET /plugins/commandcode-bridge/accounts":      true,
-		"POST /plugins/commandcode-bridge/accounts":     true,
-		"POST /plugins/commandcode-bridge/import-local": true,
-		"POST /plugins/commandcode-bridge/validate":     true,
+		"GET /plugins/commandcode-bridge/accounts":               true,
+		"POST /plugins/commandcode-bridge/accounts":              true,
+		"PUT /plugins/commandcode-bridge/accounts/models":        true,
+		"POST /plugins/commandcode-bridge/accounts/models/fetch": true,
+		"POST /plugins/commandcode-bridge/import-local":          true,
+		"POST /plugins/commandcode-bridge/validate":              true,
 	}
 	if len(response.Routes) != len(wantRoutes) {
 		t.Fatalf("routes = %#v", response.Routes)
@@ -139,7 +142,7 @@ func TestManagementListFiltersAndRedactsAccounts(t *testing.T) {
 				AuthIndex: "idx",
 				Name:      filepath.Join("/private/records", filename),
 				Path:      "/private/records/" + filename,
-				JSON:      mustJSON(t, map[string]any{"api_key": "user_list_secret", "label": "Physical label", "plan": "go", "priority": 7}),
+				JSON:      mustJSON(t, map[string]any{"api_key": "user_list_secret", "label": "Physical label", "plan": "go", "priority": 7, "models": []any{map[string]any{"name": "deepseek/deepseek-v4-pro", "alias": "cc-pro"}}}),
 			}
 			return nil
 		default:
@@ -175,11 +178,14 @@ func TestManagementListFiltersAndRedactsAccounts(t *testing.T) {
 	if account["filename"] != filename || account["fingerprint"] != "a1b2c3d4e5f6" || account["label"] != "Physical label" || account["plan"] != "go" || account["priority_override"] != nil || account["effective_priority"] != float64(7) || account["status"] != "active" || account["disabled"] != true || account["unavailable"] != true || account["editable"] != true {
 		t.Fatalf("account = %#v", account)
 	}
+	if !reflect.DeepEqual(account["models"], []any{map[string]any{"name": "deepseek/deepseek-v4-pro", "alias": "cc-pro"}}) {
+		t.Fatalf("models = %#v", account["models"])
+	}
 	allowed := map[string]bool{
 		"filename": true, "fingerprint": true, "label": true,
 		"plan": true, "priority_override": true,
 		"effective_priority": true, "status": true,
-		"disabled": true, "unavailable": true, "editable": true,
+		"disabled": true, "unavailable": true, "editable": true, "models": true,
 	}
 	for field := range account {
 		if !allowed[field] {
@@ -322,6 +328,128 @@ func TestManagementListDeduplicatesByAuthIndex(t *testing.T) {
 	}
 	if payload.Accounts[0]["fingerprint"] != "1847417fcfce" || payload.Accounts[1]["fingerprint"] != "d25d345d901c" {
 		t.Fatalf("accounts = %#v", payload.Accounts)
+	}
+}
+
+func TestManagementModelSave(t *testing.T) {
+	const accountFingerprint = "a1b2c3d4e5f6"
+	const filename = "commandcode-bridge-" + accountFingerprint + ".json"
+	physical := mustJSON(t, map[string]any{
+		"api_key": "user_model_save", "label": "Physical label", "plan": "go", "priority": 7, "disabled": true, "status": "disabled",
+	})
+	for _, test := range []struct {
+		name   string
+		models any
+		status int
+	}{
+		{name: "valid", models: []any{map[string]any{"name": "deepseek/deepseek-v4-pro", "alias": "cc-pro"}}, status: http.StatusOK},
+		{name: "duplicate name", models: []any{map[string]any{"name": "same"}, map[string]any{"name": "same"}}, status: http.StatusBadRequest},
+		{name: "duplicate alias", models: []any{map[string]any{"name": "first", "alias": "same"}, map[string]any{"name": "second", "alias": "same"}}, status: http.StatusBadRequest},
+		{name: "bad name", models: []any{map[string]any{"name": "bad name!"}}, status: http.StatusBadRequest},
+		{name: "empty name", models: []any{map[string]any{"name": ""}}, status: http.StatusBadRequest},
+		{name: "bad alias", models: []any{map[string]any{"name": "valid", "alias": "bad alias!"}}, status: http.StatusBadRequest},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var saved map[string]any
+			saves := 0
+			withHostCall(t, func(method string, request any, result any) error {
+				switch method {
+				case pluginabi.MethodHostAuthList:
+					result.(*hostAuthListResponse).Files = []pluginapi.HostAuthFileEntry{{AuthIndex: "idx", Name: filename, Provider: pluginID, Disabled: true, Status: "disabled", Priority: 7}}
+					return nil
+				case pluginabi.MethodHostAuthGet:
+					if request.(pluginapi.HostAuthGetRequest).AuthIndex != "idx" {
+						t.Fatalf("auth get = %#v", request)
+					}
+					*result.(*pluginapi.HostAuthGetResponse) = pluginapi.HostAuthGetResponse{Name: filename, JSON: physical}
+					return nil
+				case pluginabi.MethodHostAuthSave:
+					saves++
+					if err := json.Unmarshal(request.(pluginapi.HostAuthSaveRequest).JSON, &saved); err != nil {
+						t.Fatal(err)
+					}
+					return nil
+				default:
+					t.Fatalf("method = %s", method)
+					return nil
+				}
+			})
+			raw := mustHandle(t, pluginabi.MethodManagementHandle, managementRPCRequest{
+				ManagementRequest: pluginapi.ManagementRequest{Method: http.MethodPut, Path: "/plugins/commandcode-bridge/accounts/models", Body: mustJSON(t, map[string]any{"fingerprint": accountFingerprint, "models": test.models})},
+				HostCallbackID:    "callback",
+			})
+			var response pluginapi.ManagementResponse
+			decodeResult(t, raw, &response)
+			if response.StatusCode != test.status {
+				t.Fatalf("status=%d body=%s", response.StatusCode, response.Body)
+			}
+			if test.status != http.StatusOK {
+				if saves != 0 {
+					t.Fatalf("saves=%d", saves)
+				}
+				return
+			}
+			if saves != 1 || saved["api_key"] != "user_model_save" || saved["plan"] != "go" || saved["priority"] != float64(7) || saved["disabled"] != true || saved["status"] != "disabled" || !reflect.DeepEqual(saved["models"], test.models) {
+				t.Fatalf("saves=%d credential=%#v", saves, saved)
+			}
+			var payload struct {
+				Models any `json:"models"`
+			}
+			if err := json.Unmarshal(response.Body, &payload); err != nil || !reflect.DeepEqual(payload.Models, test.models) {
+				t.Fatalf("response=%s err=%v", response.Body, err)
+			}
+			for _, forbidden := range []string{"user_model_save", "idx", `"json"`, `"path"`, `"auth_index"`} {
+				if strings.Contains(string(response.Body), forbidden) {
+					t.Fatalf("response leaked %q: %s", forbidden, response.Body)
+				}
+			}
+		})
+	}
+}
+
+func TestManagementModelFetchReturnsOnlyCatalogEntries(t *testing.T) {
+	const accountFingerprint = "a1b2c3d4e5f6"
+	const filename = "commandcode-bridge-" + accountFingerprint + ".json"
+	var catalogRequest hostHTTPRequest
+	withHostCall(t, func(method string, request any, result any) error {
+		switch method {
+		case pluginabi.MethodHostAuthList:
+			result.(*hostAuthListResponse).Files = []pluginapi.HostAuthFileEntry{{AuthIndex: "idx", Name: filename, Provider: pluginID}}
+			return nil
+		case pluginabi.MethodHostAuthGet:
+			*result.(*pluginapi.HostAuthGetResponse) = pluginapi.HostAuthGetResponse{Name: filename, JSON: mustJSON(t, map[string]any{"api_key": "user_model_fetch"})}
+			return nil
+		case pluginabi.MethodHostHTTPDo:
+			catalogRequest = request.(hostHTTPRequest)
+			*result.(*pluginapi.HTTPResponse) = pluginapi.HTTPResponse{StatusCode: http.StatusOK, Body: []byte(`{"object":"list","data":[{"id":"model-a","name":"Model A","owned_by":"secret-owner","context_length":7}]}`)}
+			return nil
+		default:
+			t.Fatalf("method = %s", method)
+			return nil
+		}
+	})
+	raw := mustHandle(t, pluginabi.MethodManagementHandle, managementRPCRequest{
+		ManagementRequest: pluginapi.ManagementRequest{Method: http.MethodPost, Path: "/v0/management/plugins/commandcode-bridge/accounts/models/fetch", Body: mustJSON(t, map[string]any{"fingerprint": accountFingerprint})},
+		HostCallbackID:    "callback",
+	})
+	var response pluginapi.ManagementResponse
+	decodeResult(t, raw, &response)
+	if response.StatusCode != http.StatusOK || catalogRequest.Method != http.MethodGet || catalogRequest.URL != modelCatalogURL || catalogRequest.Headers.Get("Authorization") != "Bearer user_model_fetch" || catalogRequest.HostCallbackID != "callback" {
+		t.Fatalf("response=%#v request=%#v", response, catalogRequest)
+	}
+	var payload struct {
+		Models []map[string]any `json:"models"`
+	}
+	if err := json.Unmarshal(response.Body, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(payload.Models, []map[string]any{{"id": "model-a", "name": "Model A"}}) {
+		t.Fatalf("models=%#v", payload.Models)
+	}
+	for _, forbidden := range []string{"user_model_fetch", "secret-owner", "idx", `"json"`, `"path"`, `"auth_index"`} {
+		if strings.Contains(string(response.Body), forbidden) {
+			t.Fatalf("response leaked %q: %s", forbidden, response.Body)
+		}
 	}
 }
 
