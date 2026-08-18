@@ -52,64 +52,77 @@ func TestModelStaticReturnsEmptyOAuthCatalog(t *testing.T) {
 }
 
 func TestModelForAuthUsesLiveCatalogAndCallbackID(t *testing.T) {
-	previous := hostCall
-	t.Cleanup(func() { hostCall = previous })
 	var gotMethod string
 	var gotRequest hostHTTPRequest
-	hostCall = func(method string, request any, result any) error {
+	withHostCall(t, func(method string, request any, result any) error {
 		gotMethod = method
 		gotRequest = request.(hostHTTPRequest)
-		response := result.(*pluginapi.HTTPResponse)
-		*response = pluginapi.HTTPResponse{
+		*result.(*pluginapi.HTTPResponse) = pluginapi.HTTPResponse{
 			StatusCode: http.StatusOK,
-			Body:       []byte(`{"object":"list","data":[{"id":"live","object":"model","name":"Live","context_length":123}]}`),
+			Body:       []byte(`{"object":"list","data":[{"id":"live","object":"model","name":"Live","context_length":123},{"id":"unselected","context_length":456}]}`),
 		}
 		return nil
-	}
-	raw := mustHandle(t, pluginabi.MethodModelForAuth, authModelRPCRequest{HostCallbackID: "callback-1"})
+	})
+	raw := mustHandle(t, pluginabi.MethodModelForAuth, authModelRPCRequest{
+		AuthModelRequest: pluginapi.AuthModelRequest{StorageJSON: mustJSON(t, credential{
+			Type: pluginID, APIKey: "user_model", Models: []credentialModel{{Name: "live", Alias: "live-alias"}},
+		})},
+		HostCallbackID: "callback-1",
+	})
 	var response pluginapi.ModelResponse
 	decodeResult(t, raw, &response)
-	if gotMethod != pluginabi.MethodHostHTTPDo || gotRequest.HostCallbackID != "callback-1" || gotRequest.Method != http.MethodGet || gotRequest.URL != modelCatalogURL {
+	if gotMethod != pluginabi.MethodHostHTTPDo || gotRequest.HostCallbackID != "callback-1" || gotRequest.Method != http.MethodGet || gotRequest.URL != modelCatalogURL || gotRequest.Headers.Get("Accept") != "application/json" || gotRequest.Headers.Get("Authorization") != "Bearer user_model" {
 		t.Fatalf("host call = %s %#v", gotMethod, gotRequest)
 	}
-	if len(response.Models) != 1 || response.Models[0].ID != "live" {
+	want := []pluginapi.ModelInfo{{
+		ID: "live", Name: "live", DisplayName: "live-alias", ContextLength: 123,
+		SupportedGenerationMethods: []string{"chat"},
+		SupportedInputModalities:   []string{"text"},
+		SupportedOutputModalities:  []string{"text"},
+	}}
+	if response.Provider != pluginID || !reflect.DeepEqual(response.Models, want) {
 		t.Fatalf("response = %#v", response)
 	}
 }
 
-func TestModelForAuthFallsBackForEveryLiveFailure(t *testing.T) {
-	previous := hostCall
-	t.Cleanup(func() { hostCall = previous })
+func TestModelForAuthKeepsSelectedModelsForEveryLiveFailure(t *testing.T) {
 	cases := []struct {
 		name string
 		call func(string, any, any) error
 	}{
 		{"callback error", func(string, any, any) error { return errors.New("offline") }},
 		{"non-2xx", func(_ string, _ any, out any) error {
-			*(out.(*pluginapi.HTTPResponse)) = pluginapi.HTTPResponse{StatusCode: 503, Body: []byte(`down`)}
+			*(out.(*pluginapi.HTTPResponse)) = pluginapi.HTTPResponse{StatusCode: http.StatusServiceUnavailable, Body: []byte(`down`)}
 			return nil
 		}},
 		{"invalid json", func(_ string, _ any, out any) error {
-			*(out.(*pluginapi.HTTPResponse)) = pluginapi.HTTPResponse{StatusCode: 200, Body: []byte(`{`)}
+			*(out.(*pluginapi.HTTPResponse)) = pluginapi.HTTPResponse{StatusCode: http.StatusOK, Body: []byte(`{`)}
 			return nil
 		}},
 		{"empty set", func(_ string, _ any, out any) error {
-			*(out.(*pluginapi.HTTPResponse)) = pluginapi.HTTPResponse{StatusCode: 200, Body: []byte(`{"object":"list","data":[]}`)}
+			*(out.(*pluginapi.HTTPResponse)) = pluginapi.HTTPResponse{StatusCode: http.StatusOK, Body: []byte(`{"object":"list","data":[]}`)}
 			return nil
 		}},
 	}
-	want := snapshotModels()
-	if len(want) < 40 {
-		t.Fatalf("snapshot model count = %d", len(want))
-	}
+	want := []pluginapi.ModelInfo{{
+		ID: "selected", Name: "selected", DisplayName: "shown",
+		SupportedGenerationMethods: []string{"chat"},
+		SupportedInputModalities:   []string{"text"},
+		SupportedOutputModalities:  []string{"text"},
+	}}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
-			hostCall = test.call
-			raw := mustHandle(t, pluginabi.MethodModelForAuth, authModelRPCRequest{HostCallbackID: "callback"})
+			withHostCall(t, test.call)
+			raw := mustHandle(t, pluginabi.MethodModelForAuth, authModelRPCRequest{
+				AuthModelRequest: pluginapi.AuthModelRequest{StorageJSON: mustJSON(t, credential{
+					Type: pluginID, APIKey: "user_model", Models: []credentialModel{{Name: "selected", Alias: "shown"}},
+				})},
+				HostCallbackID: "callback",
+			})
 			var response pluginapi.ModelResponse
 			decodeResult(t, raw, &response)
 			if response.Provider != pluginID || !reflect.DeepEqual(response.Models, want) {
-				t.Fatalf("fallback differs: got %d models, want %d", len(response.Models), len(want))
+				t.Fatalf("response = %#v", response)
 			}
 		})
 	}
@@ -132,5 +145,56 @@ func TestModelResponseJSONUsesCurrentPluginAPIShape(t *testing.T) {
 	raw, err := json.Marshal(pluginapi.ModelResponse{Provider: pluginID, Models: snapshotModels()[:1]})
 	if err != nil || len(raw) == 0 {
 		t.Fatalf("marshal model response: %v", err)
+	}
+}
+
+func TestModelForAuthReturnsOnlySelectedModels(t *testing.T) {
+	raw := mustHandle(t, pluginabi.MethodModelForAuth, authModelRPCRequest{
+		AuthModelRequest: pluginapi.AuthModelRequest{
+			StorageJSON: mustJSON(t, map[string]any{
+				"type":    pluginID,
+				"api_key": "user_discover",
+				"models": []any{
+					map[string]any{"name": "deepseek/deepseek-v4-pro", "alias": "cc-pro"},
+					map[string]any{"name": "claude-sonnet-5"},
+				},
+			}),
+		},
+	})
+	var envelope rpcEnvelope
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	var resp pluginapi.ModelResponse
+	if err := json.Unmarshal(envelope.Result, &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Models) != 2 {
+		t.Fatalf("models = %#v", resp.Models)
+	}
+	if resp.Models[0].ID != "deepseek/deepseek-v4-pro" || resp.Models[0].Name != "deepseek/deepseek-v4-pro" || resp.Models[0].DisplayName != "cc-pro" {
+		t.Fatalf("model[0] = %#v", resp.Models[0])
+	}
+	if resp.Models[1].ID != "claude-sonnet-5" || resp.Models[1].Name != "claude-sonnet-5" || resp.Models[1].DisplayName != "claude-sonnet-5" {
+		t.Fatalf("model[1] = %#v", resp.Models[1])
+	}
+}
+
+func TestModelForAuthEmptySetReturnsZero(t *testing.T) {
+	raw := mustHandle(t, pluginabi.MethodModelForAuth, authModelRPCRequest{
+		AuthModelRequest: pluginapi.AuthModelRequest{
+			StorageJSON: mustJSON(t, map[string]any{"type": pluginID, "api_key": "user_discover_empty"}),
+		},
+	})
+	var envelope rpcEnvelope
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	var resp pluginapi.ModelResponse
+	if err := json.Unmarshal(envelope.Result, &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Models) != 0 {
+		t.Fatalf("models = %#v, want zero", resp.Models)
 	}
 }

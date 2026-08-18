@@ -46,6 +46,31 @@ type hostHTTPRequest struct {
 
 var hostCall = callHost
 
+func fetchModelCatalog(hostCallbackID, apiKey string) ([]catalogModel, error) {
+	var response pluginapi.HTTPResponse
+	if err := hostCall(pluginabi.MethodHostHTTPDo, hostHTTPRequest{
+		HostCallbackID: hostCallbackID,
+		Method:         http.MethodGet,
+		URL:            modelCatalogURL,
+		Headers: http.Header{
+			"Accept":        []string{"application/json"},
+			"Authorization": []string{"Bearer " + apiKey},
+		},
+	}, &response); err != nil || response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return nil, errors.New("unable to fetch model catalog")
+	}
+	var catalog catalogResponse
+	if err := json.Unmarshal(response.Body, &catalog); err != nil {
+		return nil, errors.New("invalid model catalog")
+	}
+	for _, model := range catalog.Data {
+		if strings.TrimSpace(model.ID) != "" {
+			return catalog.Data, nil
+		}
+	}
+	return nil, errors.New("empty model catalog")
+}
+
 func parseModelCatalog(raw []byte) ([]pluginapi.ModelInfo, error) {
 	var catalog catalogResponse
 	if err := json.Unmarshal(raw, &catalog); err != nil {
@@ -109,20 +134,39 @@ func handleModelStatic() ([]byte, error) {
 func handleModelForAuth(raw []byte) ([]byte, error) {
 	var request authModelRPCRequest
 	if err := json.Unmarshal(raw, &request); err != nil {
-		return errorEnvelope(&rpcError{Code: "invalid_request", Message: "invalid model discovery request", HTTPStatus: 400}), nil
+		return errorEnvelope(&rpcError{Code: "invalid_request", Message: "invalid model discovery request", HTTPStatus: http.StatusBadRequest}), nil
 	}
-	models := snapshotModels()
-	var response pluginapi.HTTPResponse
-	err := hostCall(pluginabi.MethodHostHTTPDo, hostHTTPRequest{
-		HostCallbackID: request.HostCallbackID,
-		Method:         http.MethodGet,
-		URL:            modelCatalogURL,
-		Headers:        http.Header{"Accept": []string{"application/json"}},
-	}, &response)
-	if err == nil && response.StatusCode >= 200 && response.StatusCode < 300 {
-		if live, errParse := parseModelCatalog(response.Body); errParse == nil {
-			models = live
+	value, err := normalizeCredential(request.StorageJSON)
+	if err != nil {
+		return errorEnvelope(&rpcError{Code: "invalid_credentials", Message: errInvalidCredential.Error(), HTTPStatus: http.StatusUnauthorized}), nil
+	}
+	models := make([]pluginapi.ModelInfo, 0, len(value.Models))
+	if len(value.Models) == 0 {
+		return okEnvelope(pluginapi.ModelResponse{Provider: pluginID, Models: models})
+	}
+	var contextLengths map[string]int64
+	if catalog, err := fetchModelCatalog(request.HostCallbackID, value.APIKey); err == nil && len(catalog) > 0 {
+		contextLengths = make(map[string]int64, len(catalog))
+		for _, model := range catalog {
+			if id := strings.TrimSpace(model.ID); id != "" {
+				contextLengths[id] = model.ContextLength
+			}
 		}
+	}
+	for _, model := range value.Models {
+		displayName := model.Alias
+		if displayName == "" {
+			displayName = model.Name
+		}
+		models = append(models, pluginapi.ModelInfo{
+			ID:                         model.Name,
+			Name:                       model.Name,
+			DisplayName:                displayName,
+			ContextLength:              contextLengths[model.Name],
+			SupportedGenerationMethods: []string{"chat"},
+			SupportedInputModalities:   []string{"text"},
+			SupportedOutputModalities:  []string{"text"},
+		})
 	}
 	return okEnvelope(pluginapi.ModelResponse{Provider: pluginID, Models: models})
 }

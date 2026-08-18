@@ -453,6 +453,37 @@ func TestManagementModelFetchReturnsOnlyCatalogEntries(t *testing.T) {
 	}
 }
 
+func TestManagementModelFetchRejectsUnusableCatalog(t *testing.T) {
+	const accountFingerprint = "a1b2c3d4e5f6"
+	const filename = "commandcode-bridge-" + accountFingerprint + ".json"
+	for _, catalog := range []string{`{}`, `{"object":"list","data":[]}`, `{"object":"list","data":[{"id":" "}]}`} {
+		t.Run(catalog, func(t *testing.T) {
+			withHostCall(t, func(method string, request any, result any) error {
+				switch method {
+				case pluginabi.MethodHostAuthList:
+					result.(*hostAuthListResponse).Files = []pluginapi.HostAuthFileEntry{{AuthIndex: "idx", Name: filename, Provider: pluginID}}
+				case pluginabi.MethodHostAuthGet:
+					*result.(*pluginapi.HostAuthGetResponse) = pluginapi.HostAuthGetResponse{Name: filename, JSON: mustJSON(t, map[string]any{"api_key": "user_model_fetch"})}
+				case pluginabi.MethodHostHTTPDo:
+					*result.(*pluginapi.HTTPResponse) = pluginapi.HTTPResponse{StatusCode: http.StatusOK, Body: []byte(catalog)}
+				default:
+					t.Fatalf("method = %s", method)
+				}
+				return nil
+			})
+			raw := mustHandle(t, pluginabi.MethodManagementHandle, managementRPCRequest{
+				ManagementRequest: pluginapi.ManagementRequest{Method: http.MethodPost, Path: managementModelsFetchFullPath, Body: mustJSON(t, map[string]any{"fingerprint": accountFingerprint})},
+				HostCallbackID:    "callback",
+			})
+			var response pluginapi.ManagementResponse
+			decodeResult(t, raw, &response)
+			if response.StatusCode != http.StatusBadGateway || string(response.Body) != `{"error":"unable to fetch model catalog"}` {
+				t.Fatalf("response=%#v", response)
+			}
+		})
+	}
+}
+
 func TestManagementEnrollmentValidatesBeforeSave(t *testing.T) {
 	fixture := []byte("{\"type\":\"text-delta\",\"text\":\"pong\"}\n{\"type\":\"finish\",\"finishReason\":\"stop\"}\n")
 	script := &hostCallbackScript{streamChunks: [][]byte{fixture}}

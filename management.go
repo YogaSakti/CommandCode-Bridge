@@ -362,24 +362,12 @@ func handleModelsFetch(hostCallbackID string, body []byte) pluginapi.ManagementR
 	if status != nil {
 		return *status
 	}
-	var response pluginapi.HTTPResponse
-	if err := hostCall(pluginabi.MethodHostHTTPDo, hostHTTPRequest{
-		HostCallbackID: hostCallbackID,
-		Method:         http.MethodGet,
-		URL:            modelCatalogURL,
-		Headers: http.Header{
-			"Accept":        []string{"application/json"},
-			"Authorization": []string{"Bearer " + value.APIKey},
-		},
-	}, &response); err != nil || response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+	catalog, err := fetchModelCatalog(hostCallbackID, value.APIKey)
+	if err != nil {
 		return managementJSON(http.StatusBadGateway, map[string]string{"error": "unable to fetch model catalog"})
 	}
-	var catalog catalogResponse
-	if err := json.Unmarshal(response.Body, &catalog); err != nil {
-		return managementJSON(http.StatusBadGateway, map[string]string{"error": "unable to fetch model catalog"})
-	}
-	models := make([]map[string]string, 0, len(catalog.Data))
-	for _, model := range catalog.Data {
+	models := make([]map[string]string, 0, len(catalog))
+	for _, model := range catalog {
 		if id := strings.TrimSpace(model.ID); id != "" {
 			models = append(models, map[string]string{"id": id, "name": strings.TrimSpace(model.Name)})
 		}
