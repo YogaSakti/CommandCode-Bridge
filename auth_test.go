@@ -67,6 +67,92 @@ func TestCredentialRoutingNormalization(t *testing.T) {
 	}
 }
 
+func TestCredentialModelValidationAndNormalization(t *testing.T) {
+	value, err := normalizeCredential(mustJSON(t, map[string]any{
+		"api_key": "user_models",
+		"models": []any{
+			map[string]any{"name": "deepseek/deepseek-v4-pro", "alias": "cc-pro"},
+			map[string]any{"name": "claude-sonnet-5"},
+		},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(value.Models) != 2 || value.Models[0].Name != "deepseek/deepseek-v4-pro" || value.Models[0].Alias != "cc-pro" || value.Models[1].Name != "claude-sonnet-5" || value.Models[1].Alias != "" {
+		t.Fatalf("models = %#v", value.Models)
+	}
+
+	withoutModels, err := normalizeCredential(mustJSON(t, map[string]any{"api_key": "user_no_models"}))
+	if err != nil || withoutModels.Models != nil {
+		t.Fatalf("credential without models = %#v, err = %v", withoutModels, err)
+	}
+}
+
+func TestCredentialModelSetRejectsInvalidEntries(t *testing.T) {
+	tests := []struct {
+		name   string
+		models any
+	}{
+		{name: "not array", models: map[string]any{"name": "deepseek/deepseek-v4-pro"}},
+		{name: "null", models: nil},
+		{name: "missing name", models: []any{map[string]any{"alias": "cc-pro"}}},
+		{name: "invalid name", models: []any{map[string]any{"name": "not valid"}}},
+		{name: "invalid alias", models: []any{map[string]any{"name": "deepseek/deepseek-v4-pro", "alias": "not valid"}}},
+		{name: "duplicate name", models: []any{map[string]any{"name": "deepseek/deepseek-v4-pro"}, map[string]any{"name": "deepseek/deepseek-v4-pro"}}},
+		{name: "duplicate alias", models: []any{map[string]any{"name": "deepseek/deepseek-v4-pro", "alias": "cc-pro"}, map[string]any{"name": "claude-sonnet-5", "alias": "cc-pro"}}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := normalizeCredential(mustJSON(t, map[string]any{"api_key": "user_invalid_models", "models": test.models}))
+			if !errors.Is(err, errInvalidModelSet) {
+				t.Fatalf("error = %v, want %v", err, errInvalidModelSet)
+			}
+		})
+	}
+}
+
+func TestAuthModelSetFailuresAreRoutingErrors(t *testing.T) {
+	for _, method := range []string{pluginabi.MethodAuthParse, pluginabi.MethodAuthRefresh} {
+		t.Run(method, func(t *testing.T) {
+			credentialJSON := mustJSON(t, map[string]any{"api_key": "user_invalid_model_set", "models": []any{map[string]any{"name": "not valid"}}})
+			var request any = pluginapi.AuthParseRequest{RawJSON: credentialJSON}
+			if method == pluginabi.MethodAuthRefresh {
+				request = pluginapi.AuthRefreshRequest{StorageJSON: credentialJSON}
+			}
+			raw := mustHandle(t, method, request)
+			var envelope rpcEnvelope
+			if err := json.Unmarshal(raw, &envelope); err != nil {
+				t.Fatal(err)
+			}
+			if envelope.OK || envelope.Error == nil || envelope.Error.Code != "invalid_routing" || envelope.Error.HTTPStatus != 400 {
+				t.Fatalf("envelope = %s", raw)
+			}
+		})
+	}
+}
+
+func TestResolveRequestedModel(t *testing.T) {
+	models := []credentialModel{{Name: "deepseek/deepseek-v4-pro", Alias: "cc-pro"}, {Name: "claude-sonnet-5"}}
+	for _, tc := range []struct {
+		requested, want string
+		ok              bool
+	}{
+		{requested: "deepseek/deepseek-v4-pro", want: "deepseek/deepseek-v4-pro", ok: true},
+		{requested: "cc-pro", want: "deepseek/deepseek-v4-pro", ok: true},
+		{requested: "claude-sonnet-5", want: "claude-sonnet-5", ok: true},
+		{requested: " cc-pro ", want: "deepseek/deepseek-v4-pro", ok: true},
+		{requested: "gpt-5.5", ok: false},
+	} {
+		got, ok := resolveRequestedModel(models, tc.requested)
+		if got != tc.want || ok != tc.ok {
+			t.Fatalf("resolveRequestedModel(%q) = %q, %v; want %q, %v", tc.requested, got, ok, tc.want, tc.ok)
+		}
+	}
+	if _, ok := resolveRequestedModel(nil, "deepseek/deepseek-v4-pro"); ok {
+		t.Fatal("empty model set must reject all")
+	}
+}
+
 func TestAuthParseAcceptsAliasesAndCanonicalizesStorage(t *testing.T) {
 	aliases := []string{"api_key", "apiKey", "COMMAND_CODE_API_KEY", "COMMANDCODE_API_KEY"}
 	for _, alias := range aliases {

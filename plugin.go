@@ -45,6 +45,7 @@ type lifecycleRequest struct {
 type capabilityRegistration struct {
 	ModelProvider         bool     `json:"model_provider"`
 	AuthProvider          bool     `json:"auth_provider"`
+	ModelRouter           bool     `json:"model_router"`
 	Executor              bool     `json:"executor"`
 	ExecutorModelScope    string   `json:"executor_model_scope"`
 	ExecutorInputFormats  []string `json:"executor_input_formats,omitempty"`
@@ -60,7 +61,8 @@ type registrationResponse struct {
 
 func rejectsAfterShutdown(method string) bool {
 	switch method {
-	case pluginabi.MethodExecutorExecute,
+	case pluginabi.MethodModelRoute,
+		pluginabi.MethodExecutorExecute,
 		pluginabi.MethodExecutorExecuteStream,
 		pluginabi.MethodExecutorHTTPRequest,
 		pluginabi.MethodManagementHandle:
@@ -94,6 +96,8 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 		return handleModelStatic()
 	case pluginabi.MethodModelForAuth:
 		return handleModelForAuth(request)
+	case pluginabi.MethodModelRoute:
+		return handleModelRoute(request)
 	case pluginabi.MethodExecutorIdentifier:
 		return okEnvelope(map[string]string{"identifier": pluginID})
 	case pluginabi.MethodExecutorExecute:
@@ -130,6 +134,7 @@ func registration() registrationResponse {
 			AuthProvider:          true,
 			ModelProvider:         true,
 			Executor:              true,
+			ModelRouter:           true,
 			ExecutorModelScope:    string(pluginapi.ExecutorModelScopeOAuth),
 			ExecutorInputFormats:  []string{"chat-completions"},
 			ExecutorOutputFormats: []string{"chat-completions"},

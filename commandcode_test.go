@@ -63,7 +63,7 @@ func TestExecutorNonStreamUsesHostTransportAndClosesUpstream(t *testing.T) {
 	fixture := []byte("{\"type\":\"text-delta\",\"text\":\"hello\"}\n{\"type\":\"finish\",\"finishReason\":\"stop\"}\n")
 	script := &hostCallbackScript{streamChunks: [][]byte{fixture}}
 	withHostCall(t, script.call)
-	storage := mustJSON(t, credential{Type: pluginID, APIKey: "user_secret"})
+	storage := mustJSON(t, credential{Type: pluginID, APIKey: "user_secret", Models: []credentialModel{{Name: "deepseek/deepseek-v4-pro"}}})
 	raw := mustHandle(t, pluginabi.MethodExecutorExecute, executorRPCRequest{
 		ExecutorRequest: pluginapi.ExecutorRequest{
 			Model:       "deepseek/deepseek-v4-pro",
@@ -98,7 +98,7 @@ func TestExecutorMapsUpstreamStatusWithoutLeakingCredential(t *testing.T) {
 			raw, err := handleMethod(pluginabi.MethodExecutorExecute, mustJSON(t, executorRPCRequest{
 				ExecutorRequest: pluginapi.ExecutorRequest{
 					Model: "m", Payload: []byte(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`),
-					StorageJSON: mustJSON(t, credential{Type: pluginID, APIKey: key}),
+					StorageJSON: mustJSON(t, credential{Type: pluginID, APIKey: key, Models: []credentialModel{{Name: "m"}}}),
 				},
 				HostCallbackID: "callback",
 			}))
@@ -117,6 +117,89 @@ func TestExecutorMapsUpstreamStatusWithoutLeakingCredential(t *testing.T) {
 	}
 }
 
+func TestExecutorRejectsUnselectedModel(t *testing.T) {
+	key := "user_exec_models"
+	raw := mustHandle(t, pluginabi.MethodExecutorExecute, executorRPCRequest{
+		ExecutorRequest: pluginapi.ExecutorRequest{
+			Model:       "gpt-5.5",
+			Payload:     []byte(`{"model":"gpt-5.5","messages":[{"role":"user","content":"hi"}]}`),
+			StorageJSON: mustJSON(t, map[string]any{"type": pluginID, "api_key": key, "models": []any{map[string]any{"name": "deepseek/deepseek-v4-pro"}}}),
+		},
+	})
+	assertModelRejected(t, raw, "gpt-5.5", "deepseek")
+}
+
+func TestExecutorRejectsCredentialWithoutModels(t *testing.T) {
+	raw := mustHandle(t, pluginabi.MethodExecutorExecute, executorRPCRequest{
+		ExecutorRequest: pluginapi.ExecutorRequest{
+			Model:       "deepseek/deepseek-v4-pro",
+			Payload:     []byte(`{"model":"deepseek/deepseek-v4-pro","messages":[{"role":"user","content":"hi"}]}`),
+			StorageJSON: mustJSON(t, map[string]any{"type": pluginID, "api_key": "user_without_models"}),
+		},
+	})
+	assertModelRejected(t, raw, "deepseek")
+}
+
+func TestExecutorStreamRejectsUnselectedModel(t *testing.T) {
+	raw := mustHandle(t, pluginabi.MethodExecutorExecuteStream, executorRPCRequest{
+		ExecutorRequest: pluginapi.ExecutorRequest{
+			Model:       "gpt-5.5",
+			Payload:     []byte(`{"model":"gpt-5.5","messages":[{"role":"user","content":"hi"}],"stream":true}`),
+			StorageJSON: mustJSON(t, map[string]any{"type": pluginID, "api_key": "user_exec_stream_models", "models": []any{map[string]any{"name": "deepseek/deepseek-v4-pro"}}}),
+		},
+		StreamID: "downstream-model-rejection",
+	})
+	assertModelRejected(t, raw, "gpt-5.5", "deepseek")
+}
+
+func TestExecutorRewritesAliasToUpstream(t *testing.T) {
+	var captured map[string]any
+	script := &hostCallbackScript{streamChunks: [][]byte{[]byte("{\"type\":\"finish\",\"finishReason\":\"stop\"}\n")}}
+	withHostCall(t, func(method string, request any, result any) error {
+		if method == pluginabi.MethodHostHTTPDoStream {
+			req := request.(hostHTTPRequest)
+			if err := json.Unmarshal(req.Body, &captured); err != nil {
+				return err
+			}
+		}
+		return script.call(method, request, result)
+	})
+	raw := mustHandle(t, pluginabi.MethodExecutorExecute, executorRPCRequest{
+		ExecutorRequest: pluginapi.ExecutorRequest{
+			Model:       "cc-pro",
+			Payload:     []byte(`{"model":"cc-pro","messages":[{"role":"user","content":"hi"}]}`),
+			StorageJSON: mustJSON(t, map[string]any{"type": pluginID, "api_key": "user_exec_alias", "models": []any{map[string]any{"name": "deepseek/deepseek-v4-pro", "alias": "cc-pro"}}}),
+		},
+	})
+	var envelope rpcEnvelope
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if !envelope.OK {
+		t.Fatalf("envelope = %s", raw)
+	}
+	params := captured["params"].(map[string]any)
+	if params["model"] != "deepseek/deepseek-v4-pro" {
+		t.Fatalf("upstream model = %v, want deepseek/deepseek-v4-pro", params["model"])
+	}
+}
+
+func assertModelRejected(t *testing.T, raw []byte, forbidden ...string) {
+	t.Helper()
+	var envelope rpcEnvelope
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.OK || envelope.Error == nil || envelope.Error.Code != "invalid_request" || envelope.Error.Message != "model is not enabled for this account" || envelope.Error.HTTPStatus != http.StatusBadRequest {
+		t.Fatalf("envelope = %s", raw)
+	}
+	for _, value := range forbidden {
+		if strings.Contains(string(raw), value) {
+			t.Fatalf("rejection leaked model names: %s", raw)
+		}
+	}
+}
+
 func TestExecutorStreamEmitsAndClosesBothStreams(t *testing.T) {
 	fixture := []byte("{\"type\":\"text-delta\",\"text\":\"hi\"}\n{\"type\":\"finish\",\"finishReason\":\"stop\"}\n")
 	script := &hostCallbackScript{streamChunks: [][]byte{fixture}}
@@ -124,7 +207,7 @@ func TestExecutorStreamEmitsAndClosesBothStreams(t *testing.T) {
 	raw := mustHandle(t, pluginabi.MethodExecutorExecuteStream, executorRPCRequest{
 		ExecutorRequest: pluginapi.ExecutorRequest{
 			Model: "m", Payload: []byte(`{"model":"m","messages":[{"role":"user","content":"hi"}],"stream":true}`),
-			StorageJSON: mustJSON(t, credential{Type: pluginID, APIKey: "user_stream"}),
+			StorageJSON: mustJSON(t, credential{Type: pluginID, APIKey: "user_stream", Models: []credentialModel{{Name: "m"}}}),
 		},
 		StreamID: "downstream-1", HostCallbackID: "callback",
 	})
@@ -154,7 +237,7 @@ func TestExecutorStreamEmitFailureStillClosesOnce(t *testing.T) {
 	mustHandle(t, pluginabi.MethodExecutorExecuteStream, executorRPCRequest{
 		ExecutorRequest: pluginapi.ExecutorRequest{
 			Model: "m", Payload: []byte(`{"model":"m","messages":[{"role":"user","content":"hi"}],"stream":true}`),
-			StorageJSON: mustJSON(t, credential{Type: pluginID, APIKey: "user_stream"}),
+			StorageJSON: mustJSON(t, credential{Type: pluginID, APIKey: "user_stream", Models: []credentialModel{{Name: "m"}}}),
 		},
 		StreamID: "downstream-1", HostCallbackID: "callback",
 	})
@@ -191,7 +274,7 @@ func TestShutdownClosesBlockedExecutorUpstreamBeforeWaiting(t *testing.T) {
 	mustHandle(t, pluginabi.MethodExecutorExecuteStream, executorRPCRequest{
 		ExecutorRequest: pluginapi.ExecutorRequest{
 			Model: "m", Payload: []byte(`{"model":"m","messages":[{"role":"user","content":"hi"}],"stream":true}`),
-			StorageJSON: mustJSON(t, credential{Type: pluginID, APIKey: "user_stream"}),
+			StorageJSON: mustJSON(t, credential{Type: pluginID, APIKey: "user_stream", Models: []credentialModel{{Name: "m"}}}),
 		},
 		StreamID: "downstream-1", HostCallbackID: "callback",
 	})

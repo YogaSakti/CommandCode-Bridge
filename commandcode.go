@@ -20,6 +20,21 @@ const (
 	commandCodeCLIVersion = "1.26.0"
 )
 
+func resolveRequestedModel(models []credentialModel, requested string) (string, bool) {
+	requested = strings.TrimSpace(requested)
+	for _, model := range models {
+		if requested == model.Name {
+			return model.Name, true
+		}
+	}
+	for _, model := range models {
+		if requested == model.Alias {
+			return model.Name, true
+		}
+	}
+	return "", false
+}
+
 type executorRPCRequest struct {
 	pluginapi.ExecutorRequest
 	StreamID       string `json:"stream_id,omitempty"`
@@ -243,6 +258,11 @@ func prepareExecutorRequest(raw []byte) (executorRPCRequest, credential, []byte,
 	if err != nil {
 		return request, credential{}, nil, requestOptions{}, &rpcError{Code: "invalid_credentials", Message: errInvalidCredential.Error(), HTTPStatus: 401}
 	}
+	resolved, ok := resolveRequestedModel(value.Models, request.Model)
+	if !ok {
+		return request, credential{}, nil, requestOptions{}, &rpcError{Code: "invalid_request", Message: "model is not enabled for this account", HTTPStatus: http.StatusBadRequest}
+	}
+	request.Model = resolved
 	payload := request.Payload
 	if len(payload) == 0 {
 		payload = request.OriginalRequest
@@ -255,6 +275,7 @@ func upstreamStatusError(status int) *rpcError {
 	switch status {
 	case http.StatusUnauthorized:
 		return &rpcError{Code: "invalid_credentials", Message: "CommandCode rejected the credential", HTTPStatus: status}
+
 	case http.StatusForbidden:
 		return &rpcError{Code: "upstream_forbidden", Message: "CommandCode rejected the request", HTTPStatus: status}
 	case http.StatusTooManyRequests:

@@ -65,6 +65,7 @@ func TestRegisterDeclaresExactContract(t *testing.T) {
 	want := capabilityRegistration{
 		AuthProvider:          true,
 		ModelProvider:         true,
+		ModelRouter:           true,
 		Executor:              true,
 		ExecutorModelScope:    "oauth",
 		ExecutorInputFormats:  []string{"chat-completions"},
@@ -99,6 +100,91 @@ func TestLifecycleRegistrationMatchesReconfigure(t *testing.T) {
 	}
 }
 
+func TestModelRouteForwardsCommandCodeToSelf(t *testing.T) {
+	previous := shuttingDown.Load()
+	shuttingDown.Store(false)
+	t.Cleanup(func() { shuttingDown.Store(previous) })
+	raw := mustHandle(t, pluginabi.MethodModelRoute, pluginapi.ModelRouteRequest{
+		SourceFormat:   "openai",
+		RequestedModel: "deepseek/deepseek-v4-pro",
+		Body:           []byte(`{"model":"deepseek/deepseek-v4-pro"}`),
+	})
+	var envelope rpcEnvelope
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	var response pluginapi.ModelRouteResponse
+	if err := json.Unmarshal(envelope.Result, &response); err != nil {
+		t.Fatal(err)
+	}
+	if !response.Handled || response.TargetKind != pluginapi.ModelRouteTargetSelf || response.Reason != "commandcode" {
+		t.Fatalf("response = %#v", response)
+	}
+}
+
+func TestModelRouteLeavesForeignModelsUnhandled(t *testing.T) {
+	previous := shuttingDown.Load()
+	shuttingDown.Store(false)
+	t.Cleanup(func() { shuttingDown.Store(previous) })
+	raw := mustHandle(t, pluginabi.MethodModelRoute, pluginapi.ModelRouteRequest{
+		SourceFormat:   "openai",
+		RequestedModel: "gpt-3.5-turbo",
+		Body:           []byte(`{"model":"gpt-3.5-turbo"}`),
+	})
+	var envelope rpcEnvelope
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	var response pluginapi.ModelRouteResponse
+	if err := json.Unmarshal(envelope.Result, &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Handled {
+		t.Fatalf("foreign model handled: %#v", response)
+	}
+}
+
+func TestModelRouteLeavesConfiguredModelUnavailableAtBoot(t *testing.T) {
+	previous := shuttingDown.Load()
+	shuttingDown.Store(false)
+	t.Cleanup(func() { shuttingDown.Store(previous) })
+	raw := mustHandle(t, pluginabi.MethodModelRoute, pluginapi.ModelRouteRequest{RequestedModel: "cc-pro"})
+	var response pluginapi.ModelRouteResponse
+	decodeResult(t, raw, &response)
+	if response.Handled {
+		t.Fatalf("boot/config-less model handled: %#v", response)
+	}
+}
+
+func TestModelRouteStripsThinkingSuffix(t *testing.T) {
+	previous := shuttingDown.Load()
+	shuttingDown.Store(false)
+	t.Cleanup(func() { shuttingDown.Store(previous) })
+	raw := mustHandle(t, pluginabi.MethodModelRoute, pluginapi.ModelRouteRequest{RequestedModel: "deepseek/deepseek-v4-pro(thinking)"})
+	var response pluginapi.ModelRouteResponse
+	decodeResult(t, raw, &response)
+	if !response.Handled || response.TargetKind != pluginapi.ModelRouteTargetSelf {
+		t.Fatalf("response = %#v", response)
+	}
+}
+
+func TestModelRouteRejectsMalformedRequest(t *testing.T) {
+	previous := shuttingDown.Load()
+	shuttingDown.Store(false)
+	t.Cleanup(func() { shuttingDown.Store(previous) })
+	raw, err := handleMethod(pluginabi.MethodModelRoute, []byte(`{`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var envelope rpcEnvelope
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.OK || envelope.Error == nil || envelope.Error.Code != "invalid_request" || envelope.Error.Message != "invalid model route request" || envelope.Error.HTTPStatus != http.StatusBadRequest {
+		t.Fatalf("envelope = %s", raw)
+	}
+}
+
 func TestUnknownMethodReturnsStructuredEnvelope(t *testing.T) {
 	raw, err := handleMethod("missing.method", nil)
 	if err != nil {
@@ -121,10 +207,11 @@ func TestShutdownRejectsNewExecutorAndManagementMutations(t *testing.T) {
 	withHostCall(t, func(string, any, any) error { calls++; return nil })
 
 	executorRaw := mustHandle(t, pluginabi.MethodExecutorExecute, executorRPCRequest{})
+	routerRaw := mustHandle(t, pluginabi.MethodModelRoute, pluginapi.ModelRouteRequest{})
 	managementRaw := mustHandle(t, pluginabi.MethodManagementHandle, managementRPCRequest{
 		ManagementRequest: pluginapi.ManagementRequest{Method: "POST", Path: managementAccountsPath, Body: []byte(`{"api_key":"user_test"}`)},
 	})
-	for _, raw := range [][]byte{executorRaw, managementRaw} {
+	for _, raw := range [][]byte{executorRaw, routerRaw, managementRaw} {
 		var envelope rpcEnvelope
 		if err := json.Unmarshal(raw, &envelope); err != nil {
 			t.Fatal(err)
@@ -207,7 +294,7 @@ func TestRPCContractAcceptsCPAWrapperShapes(t *testing.T) {
 		request any
 	}{
 		{pluginabi.MethodModelForAuth, authModelRPCRequest{AuthModelRequest: pluginapi.AuthModelRequest{StorageJSON: mustJSON(t, credential{Type: pluginID, APIKey: "user_model"})}, HostCallbackID: "callback"}},
-		{pluginabi.MethodExecutorExecute, executorRPCRequest{ExecutorRequest: pluginapi.ExecutorRequest{Model: "m", Payload: []byte(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`), StorageJSON: mustJSON(t, credential{Type: pluginID, APIKey: "user_exec"})}, HostCallbackID: "callback"}},
+		{pluginabi.MethodExecutorExecute, executorRPCRequest{ExecutorRequest: pluginapi.ExecutorRequest{Model: "m", Payload: []byte(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`), StorageJSON: mustJSON(t, credential{Type: pluginID, APIKey: "user_exec", Models: []credentialModel{{Name: "m"}}})}, HostCallbackID: "callback"}},
 		{pluginabi.MethodManagementHandle, managementRPCRequest{ManagementRequest: pluginapi.ManagementRequest{Method: http.MethodGet, Path: resourceAccountsPath}, HostCallbackID: "callback"}},
 	}
 	for _, item := range requests {
