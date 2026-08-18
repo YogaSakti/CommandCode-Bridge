@@ -67,6 +67,59 @@ func TestCredentialRoutingNormalization(t *testing.T) {
 	}
 }
 
+func TestCredentialModelValidationAndNormalization(t *testing.T) {
+	value, err := normalizeCredential(mustJSON(t, map[string]any{
+		"api_key": "user_models",
+		"models": []any{
+			map[string]any{"name": "deepseek/deepseek-v4-pro", "alias": "cc-pro"},
+			map[string]any{"name": "claude-sonnet-5"},
+		},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(value.Models) != 2 || value.Models[0].Name != "deepseek/deepseek-v4-pro" || value.Models[0].Alias != "cc-pro" || value.Models[1].Name != "claude-sonnet-5" || value.Models[1].Alias != "" {
+		t.Fatalf("models = %#v", value.Models)
+	}
+}
+
+func TestCredentialModelSetRejectsInvalidEntries(t *testing.T) {
+	for _, bad := range []any{
+		[]any{map[string]any{"alias": "cc-pro"}},
+		[]any{map[string]any{"name": "a", "alias": ""}, map[string]any{"name": "a"}},
+		[]any{map[string]any{"name": "a", "alias": "x"}, map[string]any{"name": "b", "alias": "x"}},
+		[]any{map[string]any{"name": "bad name!"}},
+	} {
+		if _, err := normalizeCredential(mustJSON(t, map[string]any{"api_key": "user_bad", "models": bad})); !errors.Is(err, errInvalidModelSet) {
+			t.Fatalf("models %#v: err=%v, want errInvalidModelSet", bad, err)
+		}
+	}
+}
+
+func TestResolveRequestedModel(t *testing.T) {
+	models := []credentialModel{{Name: "deepseek/deepseek-v4-pro", Alias: "cc-pro"}, {Name: "claude-sonnet-5"}}
+	for _, tc := range []struct {
+		requested, want string
+		ok              bool
+	}{
+		{requested: "deepseek/deepseek-v4-pro", want: "deepseek/deepseek-v4-pro", ok: true},
+		{requested: "cc-pro", want: "deepseek/deepseek-v4-pro", ok: true},
+		{requested: "claude-sonnet-5", want: "claude-sonnet-5", ok: true},
+		{requested: "gpt-5.5", ok: false},
+	} {
+		got, ok := resolveRequestedModel(models, tc.requested)
+		if got != tc.want || ok != tc.ok {
+			t.Fatalf("resolveRequestedModel(%q) = %q, %v; want %q, %v", tc.requested, got, ok, tc.want, tc.ok)
+		}
+	}
+	if _, ok := resolveRequestedModel(nil, "deepseek/deepseek-v4-pro"); ok {
+		t.Fatal("empty model set must reject all")
+	}
+	if _, ok := resolveRequestedModel(models, ""); ok {
+		t.Fatal("empty requested model must reject")
+	}
+}
+
 func TestAuthParseAcceptsAliasesAndCanonicalizesStorage(t *testing.T) {
 	aliases := []string{"api_key", "apiKey", "COMMAND_CODE_API_KEY", "COMMANDCODE_API_KEY"}
 	for _, alias := range aliases {

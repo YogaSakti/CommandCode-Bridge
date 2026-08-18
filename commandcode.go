@@ -234,6 +234,24 @@ func emitDownstream(streamID string, payload []byte) error {
 	return hostCall(pluginabi.MethodHostStreamEmit, hostStreamEmitRequest{StreamID: streamID, Payload: payload}, &struct{}{})
 }
 
+func resolveRequestedModel(models []credentialModel, requested string) (string, bool) {
+	requested = strings.TrimSpace(requested)
+	if requested == "" {
+		return "", false
+	}
+	for _, model := range models {
+		if requested == model.Name {
+			return model.Name, true
+		}
+	}
+	for _, model := range models {
+		if model.Alias != "" && requested == model.Alias {
+			return model.Name, true
+		}
+	}
+	return "", false
+}
+
 func prepareExecutorRequest(raw []byte) (executorRPCRequest, credential, []byte, requestOptions, *rpcError) {
 	var request executorRPCRequest
 	if err := json.Unmarshal(raw, &request); err != nil {
@@ -243,6 +261,13 @@ func prepareExecutorRequest(raw []byte) (executorRPCRequest, credential, []byte,
 	if err != nil {
 		return request, credential{}, nil, requestOptions{}, &rpcError{Code: "invalid_credentials", Message: errInvalidCredential.Error(), HTTPStatus: 401}
 	}
+	resolved, ok := resolveRequestedModel(value.Models, request.Model)
+	if !ok {
+		return request, credential{}, nil, requestOptions{}, &rpcError{
+			Code: "invalid_request", Message: "model is not enabled for this account", HTTPStatus: http.StatusBadRequest,
+		}
+	}
+	request.Model = resolved
 	payload := request.Payload
 	if len(payload) == 0 {
 		payload = request.OriginalRequest
@@ -277,10 +302,30 @@ func handleExecutorHTTPRequest(raw []byte) ([]byte, error) {
 	if headers == nil {
 		headers = make(http.Header)
 	}
+	body := request.Body
 	if strings.EqualFold(parsed.Hostname(), "api.commandcode.ai") {
 		value, credentialErr := normalizeCredential(request.StorageJSON)
 		if credentialErr != nil {
 			return errorEnvelope(&rpcError{Code: "invalid_credentials", Message: errInvalidCredential.Error(), HTTPStatus: 401}), nil
+		}
+		if len(body) > 0 {
+			var fields map[string]json.RawMessage
+			if json.Unmarshal(body, &fields) == nil {
+				if rawModel, present := fields["model"]; present {
+					var requested string
+					if err := json.Unmarshal(rawModel, &requested); err != nil {
+						return errorEnvelope(&rpcError{Code: "invalid_request", Message: "model is not enabled for this account", HTTPStatus: http.StatusBadRequest}), nil
+					}
+					resolved, ok := resolveRequestedModel(value.Models, requested)
+					if !ok {
+						return errorEnvelope(&rpcError{Code: "invalid_request", Message: "model is not enabled for this account", HTTPStatus: http.StatusBadRequest}), nil
+					}
+					if resolved != requested {
+						fields["model"], _ = json.Marshal(resolved)
+						body, _ = json.Marshal(fields)
+					}
+				}
+			}
 		}
 		headers.Set("Authorization", "Bearer "+value.APIKey)
 		headers.Set("x-command-code-version", commandCodeCLIVersion)
@@ -289,7 +334,7 @@ func handleExecutorHTTPRequest(raw []byte) ([]byte, error) {
 	var response pluginapi.HTTPResponse
 	if err := hostCall(pluginabi.MethodHostHTTPDo, hostHTTPRequest{
 		HostCallbackID: request.HostCallbackID,
-		Method:         request.Method, URL: request.URL, Headers: headers, Body: request.Body,
+		Method:         request.Method, URL: request.URL, Headers: headers, Body: body,
 	}, &response); err != nil {
 		return errorEnvelope(&rpcError{Code: "upstream_error", Message: "executor HTTP request failed", Retryable: true, HTTPStatus: 502}), nil
 	}

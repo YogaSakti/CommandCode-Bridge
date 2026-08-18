@@ -59,11 +59,157 @@ func (s *hostCallbackScript) call(method string, request any, result any) error 
 	return nil
 }
 
+func TestExecutorRejectsUnselectedModel(t *testing.T) {
+	key := "user_exec_models"
+	raw := mustHandle(t, pluginabi.MethodExecutorExecute, executorRPCRequest{
+		ExecutorRequest: pluginapi.ExecutorRequest{
+			Model:       "gpt-5.5",
+			Payload:     []byte(`{"model":"gpt-5.5","messages":[{"role":"user","content":"hi"}]}`),
+			StorageJSON: mustJSON(t, map[string]any{"type": pluginID, "api_key": key, "models": []any{map[string]any{"name": "deepseek/deepseek-v4-pro"}}}),
+		},
+	})
+	var envelope rpcEnvelope
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.OK || envelope.Error == nil || envelope.Error.Code != "invalid_request" || envelope.Error.HTTPStatus != http.StatusBadRequest || envelope.Error.Message != "model is not enabled for this account" {
+		t.Fatalf("envelope = %s", raw)
+	}
+	if strings.Contains(string(raw), "gpt-5.5") || strings.Contains(string(raw), "deepseek") {
+		t.Fatalf("rejection leaked model names: %s", raw)
+	}
+}
+
+func TestExecutorStreamRejectsUnselectedModel(t *testing.T) {
+	raw := mustHandle(t, pluginabi.MethodExecutorExecuteStream, executorRPCRequest{
+		ExecutorRequest: pluginapi.ExecutorRequest{
+			Model:       "gpt-5.5",
+			Payload:     []byte(`{"model":"gpt-5.5","messages":[{"role":"user","content":"hi"}],"stream":true}`),
+			StorageJSON: mustJSON(t, map[string]any{"type": pluginID, "api_key": "user_exec_stream_models", "models": []any{map[string]any{"name": "deepseek/deepseek-v4-pro"}}}),
+		},
+		StreamID: "rejected-stream",
+	})
+	var envelope rpcEnvelope
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.OK || envelope.Error == nil || envelope.Error.Code != "invalid_request" || envelope.Error.HTTPStatus != http.StatusBadRequest || envelope.Error.Message != "model is not enabled for this account" {
+		t.Fatalf("envelope = %s", raw)
+	}
+	if strings.Contains(string(raw), "gpt-5.5") || strings.Contains(string(raw), "deepseek") {
+		t.Fatalf("rejection leaked model names: %s", raw)
+	}
+}
+
+func TestExecutorRejectsMissingModelSet(t *testing.T) {
+	raw := mustHandle(t, pluginabi.MethodExecutorExecute, executorRPCRequest{
+		ExecutorRequest: pluginapi.ExecutorRequest{
+			Model:       "gpt-5.5",
+			Payload:     []byte(`{"model":"gpt-5.5","messages":[{"role":"user","content":"hi"}]}`),
+			StorageJSON: mustJSON(t, credential{Type: pluginID, APIKey: "user_exec_no_models"}),
+		},
+	})
+	var envelope rpcEnvelope
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.OK || envelope.Error == nil || envelope.Error.Code != "invalid_request" || envelope.Error.HTTPStatus != http.StatusBadRequest || envelope.Error.Message != "model is not enabled for this account" {
+		t.Fatalf("envelope = %s", raw)
+	}
+	if strings.Contains(string(raw), "gpt-5.5") {
+		t.Fatalf("rejection leaked model name: %s", raw)
+	}
+}
+
+func TestExecutorRewritesAliasToUpstream(t *testing.T) {
+	var captured map[string]any
+	withHostCall(t, func(method string, request any, result any) error {
+		switch method {
+		case pluginabi.MethodHostHTTPDoStream:
+			req := request.(hostHTTPRequest)
+			if err := json.Unmarshal(req.Body, &captured); err != nil {
+				return err
+			}
+			*result.(*hostHTTPStreamResponse) = hostHTTPStreamResponse{StatusCode: http.StatusOK, StreamID: "alias-upstream"}
+		case pluginabi.MethodHostHTTPStreamRead:
+			*result.(*hostHTTPStreamReadResponse) = hostHTTPStreamReadResponse{Payload: []byte(`{"type":"finish","finishReason":"stop"}`), Done: true}
+		}
+		return nil
+	})
+	raw := mustHandle(t, pluginabi.MethodExecutorExecute, executorRPCRequest{
+		ExecutorRequest: pluginapi.ExecutorRequest{
+			Model:       "cc-pro",
+			Payload:     []byte(`{"model":"cc-pro","messages":[{"role":"user","content":"hi"}]}`),
+			StorageJSON: mustJSON(t, map[string]any{"type": pluginID, "api_key": "user_exec_alias", "models": []any{map[string]any{"name": "deepseek/deepseek-v4-pro", "alias": "cc-pro"}}}),
+		},
+	})
+	var envelope rpcEnvelope
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if !envelope.OK {
+		t.Fatalf("envelope = %s", raw)
+	}
+	params := captured["params"].(map[string]any)
+	if params["model"] != "deepseek/deepseek-v4-pro" {
+		t.Fatalf("upstream model = %v, want deepseek/deepseek-v4-pro", params["model"])
+	}
+}
+
+func TestExecutorHTTPRequestEnforcesModelSet(t *testing.T) {
+	t.Run("rejects unselected", func(t *testing.T) {
+		raw := mustHandle(t, pluginabi.MethodExecutorHTTPRequest, executorHTTPRPCRequest{
+			ExecutorHTTPRequest: pluginapi.ExecutorHTTPRequest{
+				Method: http.MethodPost, URL: "https://api.commandcode.ai/provider/v1/chat/completions",
+				Body: []byte(`{"model":"gpt-5.5"}`),
+				StorageJSON: mustJSON(t, map[string]any{"type": pluginID, "api_key": "user_http_models", "models": []any{map[string]any{"name": "deepseek/deepseek-v4-pro"}}}),
+			},
+		})
+		var envelope rpcEnvelope
+		if err := json.Unmarshal(raw, &envelope); err != nil {
+			t.Fatal(err)
+		}
+		if envelope.OK || envelope.Error == nil || envelope.Error.Code != "invalid_request" || envelope.Error.HTTPStatus != http.StatusBadRequest || envelope.Error.Message != "model is not enabled for this account" {
+			t.Fatalf("envelope = %s", raw)
+		}
+		if strings.Contains(string(raw), "gpt-5.5") || strings.Contains(string(raw), "deepseek") {
+			t.Fatalf("rejection leaked model names: %s", raw)
+		}
+	})
+
+	t.Run("rewrites alias", func(t *testing.T) {
+		var captured hostHTTPRequest
+		withHostCall(t, func(method string, request any, result any) error {
+			if method == pluginabi.MethodHostHTTPDo {
+				captured = request.(hostHTTPRequest)
+				*result.(*pluginapi.HTTPResponse) = pluginapi.HTTPResponse{StatusCode: http.StatusNoContent}
+			}
+			return nil
+		})
+		raw := mustHandle(t, pluginabi.MethodExecutorHTTPRequest, executorHTTPRPCRequest{
+			ExecutorHTTPRequest: pluginapi.ExecutorHTTPRequest{
+				Method: http.MethodPost, URL: "https://api.commandcode.ai/provider/v1/chat/completions",
+				Body: []byte(`{"model":"cc-pro"}`),
+				StorageJSON: mustJSON(t, map[string]any{"type": pluginID, "api_key": "user_http_alias", "models": []any{map[string]any{"name": "deepseek/deepseek-v4-pro", "alias": "cc-pro"}}}),
+			},
+		})
+		var response pluginapi.ExecutorHTTPResponse
+		decodeResult(t, raw, &response)
+		var body map[string]any
+		if err := json.Unmarshal(captured.Body, &body); err != nil {
+			t.Fatal(err)
+		}
+		if body["model"] != "deepseek/deepseek-v4-pro" {
+			t.Fatalf("upstream model = %v, want deepseek/deepseek-v4-pro", body["model"])
+		}
+	})
+}
+
 func TestExecutorNonStreamUsesHostTransportAndClosesUpstream(t *testing.T) {
 	fixture := []byte("{\"type\":\"text-delta\",\"text\":\"hello\"}\n{\"type\":\"finish\",\"finishReason\":\"stop\"}\n")
 	script := &hostCallbackScript{streamChunks: [][]byte{fixture}}
 	withHostCall(t, script.call)
-	storage := mustJSON(t, credential{Type: pluginID, APIKey: "user_secret"})
+	storage := mustJSON(t, credential{Type: pluginID, APIKey: "user_secret", Models: []credentialModel{{Name: "deepseek/deepseek-v4-pro"}}})
 	raw := mustHandle(t, pluginabi.MethodExecutorExecute, executorRPCRequest{
 		ExecutorRequest: pluginapi.ExecutorRequest{
 			Model:       "deepseek/deepseek-v4-pro",
@@ -98,7 +244,7 @@ func TestExecutorMapsUpstreamStatusWithoutLeakingCredential(t *testing.T) {
 			raw, err := handleMethod(pluginabi.MethodExecutorExecute, mustJSON(t, executorRPCRequest{
 				ExecutorRequest: pluginapi.ExecutorRequest{
 					Model: "m", Payload: []byte(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`),
-					StorageJSON: mustJSON(t, credential{Type: pluginID, APIKey: key}),
+					StorageJSON: mustJSON(t, credential{Type: pluginID, APIKey: key, Models: []credentialModel{{Name: "m"}}}),
 				},
 				HostCallbackID: "callback",
 			}))
@@ -124,7 +270,7 @@ func TestExecutorStreamEmitsAndClosesBothStreams(t *testing.T) {
 	raw := mustHandle(t, pluginabi.MethodExecutorExecuteStream, executorRPCRequest{
 		ExecutorRequest: pluginapi.ExecutorRequest{
 			Model: "m", Payload: []byte(`{"model":"m","messages":[{"role":"user","content":"hi"}],"stream":true}`),
-			StorageJSON: mustJSON(t, credential{Type: pluginID, APIKey: "user_stream"}),
+			StorageJSON: mustJSON(t, credential{Type: pluginID, APIKey: "user_stream", Models: []credentialModel{{Name: "m"}}}),
 		},
 		StreamID: "downstream-1", HostCallbackID: "callback",
 	})
@@ -154,7 +300,7 @@ func TestExecutorStreamEmitFailureStillClosesOnce(t *testing.T) {
 	mustHandle(t, pluginabi.MethodExecutorExecuteStream, executorRPCRequest{
 		ExecutorRequest: pluginapi.ExecutorRequest{
 			Model: "m", Payload: []byte(`{"model":"m","messages":[{"role":"user","content":"hi"}],"stream":true}`),
-			StorageJSON: mustJSON(t, credential{Type: pluginID, APIKey: "user_stream"}),
+			StorageJSON: mustJSON(t, credential{Type: pluginID, APIKey: "user_stream", Models: []credentialModel{{Name: "m"}}}),
 		},
 		StreamID: "downstream-1", HostCallbackID: "callback",
 	})
@@ -191,7 +337,7 @@ func TestShutdownClosesBlockedExecutorUpstreamBeforeWaiting(t *testing.T) {
 	mustHandle(t, pluginabi.MethodExecutorExecuteStream, executorRPCRequest{
 		ExecutorRequest: pluginapi.ExecutorRequest{
 			Model: "m", Payload: []byte(`{"model":"m","messages":[{"role":"user","content":"hi"}],"stream":true}`),
-			StorageJSON: mustJSON(t, credential{Type: pluginID, APIKey: "user_stream"}),
+			StorageJSON: mustJSON(t, credential{Type: pluginID, APIKey: "user_stream", Models: []credentialModel{{Name: "m"}}}),
 		},
 		StreamID: "downstream-1", HostCallbackID: "callback",
 	})
@@ -224,7 +370,7 @@ func TestExecutorAuxiliaryMethods(t *testing.T) {
 		ExecutorHTTPRequest: pluginapi.ExecutorHTTPRequest{
 			Method: "GET", URL: "https://api.commandcode.ai/provider/v1/models",
 			Headers:     http.Header{"X-Client": []string{"1"}},
-			StorageJSON: mustJSON(t, credential{Type: pluginID, APIKey: "user_http"}),
+			StorageJSON: mustJSON(t, credential{Type: pluginID, APIKey: "user_http", Models: []credentialModel{{Name: "unused"}}}),
 		},
 		HostCallbackID: "callback",
 	})

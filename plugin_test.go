@@ -207,7 +207,7 @@ func TestRPCContractAcceptsCPAWrapperShapes(t *testing.T) {
 		request any
 	}{
 		{pluginabi.MethodModelForAuth, authModelRPCRequest{AuthModelRequest: pluginapi.AuthModelRequest{StorageJSON: mustJSON(t, credential{Type: pluginID, APIKey: "user_model"})}, HostCallbackID: "callback"}},
-		{pluginabi.MethodExecutorExecute, executorRPCRequest{ExecutorRequest: pluginapi.ExecutorRequest{Model: "m", Payload: []byte(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`), StorageJSON: mustJSON(t, credential{Type: pluginID, APIKey: "user_exec"})}, HostCallbackID: "callback"}},
+		{pluginabi.MethodExecutorExecute, executorRPCRequest{ExecutorRequest: pluginapi.ExecutorRequest{Model: "m", Payload: []byte(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`), StorageJSON: mustJSON(t, credential{Type: pluginID, APIKey: "user_exec", Models: []credentialModel{{Name: "m"}}})}, HostCallbackID: "callback"}},
 		{pluginabi.MethodManagementHandle, managementRPCRequest{ManagementRequest: pluginapi.ManagementRequest{Method: http.MethodGet, Path: resourceAccountsPath}, HostCallbackID: "callback"}},
 	}
 	for _, item := range requests {
