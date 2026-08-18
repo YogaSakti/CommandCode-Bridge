@@ -22,9 +22,6 @@ jobs:
           - target: windows-amd64
             runner: windows-latest
             ext: dll
-          - target: windows-arm64
-            runner: windows-11-arm
-            ext: dll
           - target: linux-amd64
             runner: ubuntu-latest
             ext: so
