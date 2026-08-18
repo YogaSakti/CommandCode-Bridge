@@ -274,6 +274,57 @@ func TestManagementListDegradesBadPhysicalRows(t *testing.T) {
 	}
 }
 
+func TestManagementListDeduplicatesByAuthIndex(t *testing.T) {
+	const filename = "commandcode-bridge-1847417fcfce.json"
+	withHostCall(t, func(method string, request any, result any) error {
+		switch method {
+		case pluginabi.MethodHostAuthList:
+			result.(*hostAuthListResponse).Files = []pluginapi.HostAuthFileEntry{
+				{ID: "commandcode-bridge-1847417fcfce", AuthIndex: "0b4a9c19524758b9", Name: filename, Provider: pluginID, Label: "ACC 1", Status: "active", Priority: 7},
+				{ID: "commandcode-bridge-1847417fcfce.json", AuthIndex: "0b4a9c19524758b9", Name: filename, Provider: pluginID, Label: "ACC 1", Status: "active", Priority: 7},
+				{ID: "commandcode-bridge-d25d345d901c", AuthIndex: "443f07786195a9ca", Name: "commandcode-bridge-d25d345d901c.json", Provider: pluginID, Label: "ACC 2", Status: "active", Priority: 7},
+			}
+			return nil
+		case pluginabi.MethodHostAuthGet:
+			req := request.(pluginapi.HostAuthGetRequest)
+			var value map[string]any
+			switch req.AuthIndex {
+			case "0b4a9c19524758b9":
+				value = map[string]any{"api_key": "user_aaa", "label": "ACC 1", "plan": "go", "priority": 7}
+			case "443f07786195a9ca":
+				value = map[string]any{"api_key": "user_bbb", "label": "ACC 2", "plan": "go", "priority": 7}
+			default:
+				t.Fatalf("unexpected auth index %q", req.AuthIndex)
+			}
+			*result.(*pluginapi.HostAuthGetResponse) = pluginapi.HostAuthGetResponse{Name: filename, JSON: mustJSON(t, value)}
+			return nil
+		default:
+			t.Fatalf("method = %s", method)
+			return nil
+		}
+	})
+	raw := mustHandle(t, pluginabi.MethodManagementHandle, managementRPCRequest{
+		ManagementRequest: pluginapi.ManagementRequest{Method: http.MethodGet, Path: managementAccountsPath},
+	})
+	var response pluginapi.ManagementResponse
+	decodeResult(t, raw, &response)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d body=%s", response.StatusCode, response.Body)
+	}
+	var payload struct {
+		Accounts []map[string]any `json:"accounts"`
+	}
+	if err := json.Unmarshal(response.Body, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Accounts) != 2 {
+		t.Fatalf("accounts = %#v, want 2", payload.Accounts)
+	}
+	if payload.Accounts[0]["fingerprint"] != "1847417fcfce" || payload.Accounts[1]["fingerprint"] != "d25d345d901c" {
+		t.Fatalf("accounts = %#v", payload.Accounts)
+	}
+}
+
 func TestManagementEnrollmentValidatesBeforeSave(t *testing.T) {
 	fixture := []byte("{\"type\":\"text-delta\",\"text\":\"pong\"}\n{\"type\":\"finish\",\"finishReason\":\"stop\"}\n")
 	script := &hostCallbackScript{streamChunks: [][]byte{fixture}}

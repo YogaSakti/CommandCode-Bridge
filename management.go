@@ -131,10 +131,20 @@ func listManagementAccounts(hostCallbackID string) pluginapi.ManagementResponse 
 		return managementJSON(http.StatusBadGateway, map[string]string{"error": "unable to list accounts"})
 	}
 	accounts := make([]managementAccount, 0, len(files))
+	seen := make(map[string]struct{}, len(files))
 	for _, file := range files {
 		if !isCommandCodeBridgeAccount(file) {
 			continue
 		}
+		key := strings.TrimSpace(file.AuthIndex)
+		if key == "" {
+			// Fall back to filename when the host omits the runtime index.
+			key = filepath.Base(strings.TrimSpace(file.Name))
+		}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
 		filename := filepath.Base(strings.TrimSpace(file.Name))
 		account := managementAccount{
 			Filename:          filename,
