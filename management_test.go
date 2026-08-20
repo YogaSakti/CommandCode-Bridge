@@ -40,7 +40,7 @@ func TestAccountsPageIsStaticAndKeepsMutationsAuthenticated(t *testing.T) {
 		`name="plan"`, `name="priority_override"`, `min="1"`, `max="10"`,
 		`Round-robin`, `Fill-first`, `Effective priority`, `<th>Action</th>`, `colSpan=7`,
 		`setAttribute('aria-label',`, `Edit routing for ${account.filename}`, `Save routing for ${account.filename}`,
-		`button.onclick=()=>{`, `lockRowActions(actionCell,button)`, `lockRowActions(actionCell,null)`, `unlockRowActions(actionCell)`,
+		`button.onclick=()=>{`, `lockAccountActions(button)`, `lockAccountActions(null)`, `unlockAccountActions()`,
 	} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("page missing %q", want)
