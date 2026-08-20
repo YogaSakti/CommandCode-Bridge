@@ -21,6 +21,7 @@ type openAIChatRequest struct {
 	MaxCompletionTokens *int64          `json:"max_completion_tokens"`
 	Temperature         *float64        `json:"temperature"`
 	TopP                *float64        `json:"top_p"`
+	ReasoningEffort     string          `json:"reasoning_effort"`
 	Stream              bool            `json:"stream"`
 	StreamOptions       struct {
 		IncludeUsage bool `json:"include_usage"`
@@ -151,6 +152,9 @@ func translateOpenAIRequest(raw []byte, executorModel string, now time.Time, ses
 	}
 	if request.TopP != nil {
 		params["top_p"] = *request.TopP
+	}
+	if effort := strings.TrimSpace(request.ReasoningEffort); effort != "" {
+		params["reasoning_effort"] = effort
 	}
 	if len(request.Tools) > 0 {
 		tools := make([]any, 0, len(request.Tools))

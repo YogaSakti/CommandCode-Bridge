@@ -22,6 +22,7 @@ func TestOpenAIRequestMapsMessagesToolsAndOptions(t *testing.T) {
 		"max_completion_tokens":80,
 		"temperature":0.2,
 		"top_p":0.9,
+		"reasoning_effort":"high",
 		"stream":true,
 		"stream_options":{"include_usage":true}
 	}`)
@@ -44,7 +45,7 @@ func TestOpenAIRequestMapsMessagesToolsAndOptions(t *testing.T) {
 		t.Fatalf("config = %#v", config)
 	}
 	params := body["params"].(map[string]any)
-	if params["model"] != "deepseek/deepseek-v4-pro" || params["system"] != "developer rules\n\nsystem rules" || params["stream"] != true || params["max_tokens"] != float64(80) || params["temperature"] != 0.2 || params["top_p"] != 0.9 {
+	if params["model"] != "deepseek/deepseek-v4-pro" || params["system"] != "developer rules\n\nsystem rules" || params["stream"] != true || params["max_tokens"] != float64(80) || params["temperature"] != 0.2 || params["top_p"] != 0.9 || params["reasoning_effort"] != "high" {
 		t.Fatalf("params = %#v", params)
 	}
 	messages := params["messages"].([]any)
