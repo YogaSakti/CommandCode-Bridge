@@ -34,6 +34,7 @@ func TestAccountsPageIsStaticAndKeepsMutationsAuthenticated(t *testing.T) {
 		`/v0/management/plugins/commandcode-bridge/import-local`,
 		`/v0/management/plugins/commandcode-bridge/validate`,
 		`/v0/management/auth-files/fields`, `method='PATCH'`,
+		`Models`, `models/fetch`, `models', 'PUT'`, `fetchCatalog`, `saveModels`,
 		`Authorization`, `Bearer `, `cli-proxy-auth`, `enc::v1::`, `managementKey`, `sessionKey`,
 		`href="/management.html#/auth-files"`, `type="password"`, `<form`, `<table`,
 		`name="plan"`, `name="priority_override"`, `min="1"`, `max="10"`,
@@ -49,7 +50,7 @@ func TestAccountsPageIsStaticAndKeepsMutationsAuthenticated(t *testing.T) {
 		`http://`, `https://`, `<script src=`, `<link rel=`, `localStorage.setItem`, `sessionStorage`,
 		`/v0/management/plugins/commandcode/`, `/v0/resource/plugins/commandcode/`, `CommandCode Accounts`,
 		`type="file"`, `name="path"`, `deleteAccount`, `method: "DELETE"`,
-		`accounts.innerHTML`, `account.api_key`, `account.auth_index`, `account.index`, `account.path`,
+		`accounts.innerHTML`, `account.api_key`, `account.storage_json`, `account.auth_index`, `account.index`, `account.path`,
 		`button.addEventListener('click'`,
 	} {
 		if strings.Contains(page, forbidden) {
