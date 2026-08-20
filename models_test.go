@@ -74,12 +74,10 @@ func TestModelForAuthUsesLiveCatalogAndCallbackID(t *testing.T) {
 	if gotMethod != pluginabi.MethodHostHTTPDo || gotRequest.HostCallbackID != "callback-1" || gotRequest.Method != http.MethodGet || gotRequest.URL != modelCatalogURL || gotRequest.Headers.Get("Accept") != "application/json" || gotRequest.Headers.Get("Authorization") != "Bearer user_model" {
 		t.Fatalf("host call = %s %#v", gotMethod, gotRequest)
 	}
-	want := []pluginapi.ModelInfo{{
-		ID: "live", Name: "live", DisplayName: "live-alias", ContextLength: 123,
-		SupportedGenerationMethods: []string{"chat"},
-		SupportedInputModalities:   []string{"text"},
-		SupportedOutputModalities:  []string{"text"},
-	}}
+	want := []pluginapi.ModelInfo{
+		{ID: "live", Name: "live", DisplayName: "live", ContextLength: 123, SupportedGenerationMethods: []string{"chat"}, SupportedInputModalities: []string{"text"}, SupportedOutputModalities: []string{"text"}},
+		{ID: "live-alias", Name: "live", DisplayName: "live-alias", ContextLength: 123, SupportedGenerationMethods: []string{"chat"}, SupportedInputModalities: []string{"text"}, SupportedOutputModalities: []string{"text"}},
+	}
 	if response.Provider != pluginID || !reflect.DeepEqual(response.Models, want) {
 		t.Fatalf("response = %#v", response)
 	}
@@ -104,12 +102,20 @@ func TestModelForAuthKeepsSelectedModelsForEveryLiveFailure(t *testing.T) {
 			return nil
 		}},
 	}
-	want := []pluginapi.ModelInfo{{
-		ID: "selected", Name: "selected", DisplayName: "shown",
-		SupportedGenerationMethods: []string{"chat"},
-		SupportedInputModalities:   []string{"text"},
-		SupportedOutputModalities:  []string{"text"},
-	}}
+	want := []pluginapi.ModelInfo{
+		{
+			ID: "selected", Name: "selected", DisplayName: "selected",
+			SupportedGenerationMethods: []string{"chat"},
+			SupportedInputModalities:   []string{"text"},
+			SupportedOutputModalities:  []string{"text"},
+		},
+		{
+			ID: "shown", Name: "selected", DisplayName: "shown",
+			SupportedGenerationMethods: []string{"chat"},
+			SupportedInputModalities:   []string{"text"},
+			SupportedOutputModalities:  []string{"text"},
+		},
+	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
 			withHostCall(t, test.call)
@@ -169,14 +175,17 @@ func TestModelForAuthReturnsOnlySelectedModels(t *testing.T) {
 	if err := json.Unmarshal(envelope.Result, &resp); err != nil {
 		t.Fatal(err)
 	}
-	if len(resp.Models) != 2 {
+	if len(resp.Models) != 3 {
 		t.Fatalf("models = %#v", resp.Models)
 	}
-	if resp.Models[0].ID != "deepseek/deepseek-v4-pro" || resp.Models[0].Name != "deepseek/deepseek-v4-pro" || resp.Models[0].DisplayName != "cc-pro" {
+	if resp.Models[0].ID != "deepseek/deepseek-v4-pro" || resp.Models[0].Name != "deepseek/deepseek-v4-pro" || resp.Models[0].DisplayName != "deepseek/deepseek-v4-pro" {
 		t.Fatalf("model[0] = %#v", resp.Models[0])
 	}
-	if resp.Models[1].ID != "claude-sonnet-5" || resp.Models[1].Name != "claude-sonnet-5" || resp.Models[1].DisplayName != "claude-sonnet-5" {
+	if resp.Models[1].ID != "cc-pro" || resp.Models[1].Name != "deepseek/deepseek-v4-pro" || resp.Models[1].DisplayName != "cc-pro" {
 		t.Fatalf("model[1] = %#v", resp.Models[1])
+	}
+	if resp.Models[2].ID != "claude-sonnet-5" || resp.Models[2].Name != "claude-sonnet-5" || resp.Models[2].DisplayName != "claude-sonnet-5" {
+		t.Fatalf("model[2] = %#v", resp.Models[2])
 	}
 }
 

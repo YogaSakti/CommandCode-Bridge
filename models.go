@@ -154,19 +154,27 @@ func handleModelForAuth(raw []byte) ([]byte, error) {
 		}
 	}
 	for _, model := range value.Models {
-		displayName := model.Alias
-		if displayName == "" {
-			displayName = model.Name
-		}
-		models = append(models, pluginapi.ModelInfo{
-			ID:                         model.Name,
+		contextLength := contextLengths[model.Name]
+		base := pluginapi.ModelInfo{
 			Name:                       model.Name,
-			DisplayName:                displayName,
-			ContextLength:              contextLengths[model.Name],
+			ContextLength:              contextLength,
 			SupportedGenerationMethods: []string{"chat"},
 			SupportedInputModalities:   []string{"text"},
 			SupportedOutputModalities:  []string{"text"},
-		})
+		}
+		// The upstream name is always routable.
+		upstream := base
+		upstream.ID = model.Name
+		upstream.DisplayName = model.Name
+		models = append(models, upstream)
+		// An alias is also routable as a client-visible model ID; the executor
+		// resolves it back to the upstream name before sending upstream.
+		if alias := model.Alias; alias != "" && alias != model.Name {
+			aliased := base
+			aliased.ID = alias
+			aliased.DisplayName = alias
+			models = append(models, aliased)
+		}
 	}
 	return okEnvelope(pluginapi.ModelResponse{Provider: pluginID, Models: models})
 }
