@@ -58,10 +58,11 @@ Open **CommandCode Bridge Accounts** in CPA Management Center.
 - **Validate and add:** paste a `user_...` API key and optional label. Select the account plan and, if needed, set a priority override between `1` and `10`. The plugin validates the key through Command Code before asking CPA to save canonical auth JSON.
 - **Validate only:** performs the same live validation without persistence.
 - **Import local CLI credential:** reads only `~/.commandcode/auth.json`; request data cannot override this path. Select the plan and optional priority override before importing.
-- **Edit an existing account:** use CPA's authenticated native **Auth Files** field update to change the plan or priority override on the physical account without entering its API key.
-- **Choose models per account:** open **Models** on an account row. Fetch the live Command Code catalog with that account's key, tick the models it may use, optionally set a client alias per model, add custom model IDs, and save. An account exposes no models until you select at least one; a request for a model that account does not list is rejected with `400`.
+- **Edit routing:** open **Routing** on an account card, choose the plan and optional priority override, then save. The page sends CPA's authenticated native Auth Files field update without asking for the account API key.
+- **Choose models per account:** open **Models** on an account card. Fetch the live Command Code catalog with that account's key, select models, optionally set a client alias per model, add custom model IDs, and save. An account exposes no models until you select at least one; a request for a model that account does not list is rejected with `400`.
 - **Aliases:** an alias is a client-visible name mapped to one upstream Command Code model for that account. A request using the alias is rewritten to the upstream model before execution. Leave the alias empty to call the model by its upstream name.
 - **Delete or disable:** use CPA's **Auth Files** page. The plugin intentionally exposes no deletion route.
+- **Management access:** the optional disclosure stays collapsed when CPAP provides remembered management credentials. If no credential is available, open it and enter the management password for the current tab.
 
 Stored files use `commandcode-bridge-<12-hex-fingerprint>.json`. Raw keys, auth JSON, paths, auth indexes, and Authorization headers are excluded from plugin responses and logs. Editing an account's models writes the updated model set to the physical credential file; CPA v7.2.133 may rebuild the in-memory auth record as active on that save, so re-apply any disabled/status flag through **Auth Files** if needed.
 

@@ -35,10 +35,15 @@ PAGE="$ROOT/web/accounts.html"
 for want in \
   '<title>CommandCode Bridge Accounts</title>' \
   '<h1>CommandCode Bridge Accounts</h1>' \
+  '<details id="management-access"' \
+  'class="workspace"' \
+  'id="accounts" class="account-list"' \
+  '@media(max-width:820px)' \
+  '--primary-contrast' \
   '/v0/management/plugins/commandcode-bridge/accounts' \
   '/v0/management/plugins/commandcode-bridge/import-local' \
   '/v0/management/plugins/commandcode-bridge/validate'; do
-  grep -Fq "$want" "$PAGE" || fail "accounts page missing $want"
+  grep -Fq -- "$want" "$PAGE" || fail "accounts page missing $want"
 done
 for legacy in '/v0/management/plugins/commandcode/' '/v0/resource/plugins/commandcode/'; do
   ! grep -Fq "$legacy" "$PAGE" || fail "accounts page retains legacy route: $legacy"

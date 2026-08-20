@@ -30,17 +30,26 @@ func TestAccountsPageIsStaticAndKeepsMutationsAuthenticated(t *testing.T) {
 	page := string(response.Body)
 	for _, want := range []string{
 		`<title>CommandCode Bridge Accounts</title>`, `<h1>CommandCode Bridge Accounts</h1>`, `CommandCode API key`,
+		`class="workspace"`, `<details id="management-access"`, `<summary>Management access</summary>`,
+		`class="panel add-account"`, `id="accounts" class="account-list"`,
+		`class="secondary" type="button">Refresh</button>`, `account-card`, `account-editor`, `model-chip`,
+		`--primary-contrast`, `.primary`, `.secondary`, `color:var(--text-primary)`, `@media(max-width:820px)`,
 		`/v0/management/plugins/commandcode-bridge/accounts`,
 		`/v0/management/plugins/commandcode-bridge/import-local`,
 		`/v0/management/plugins/commandcode-bridge/validate`,
 		`/v0/management/auth-files/fields`, `method='PATCH'`,
-		`Models`, `models/fetch`, `models', 'PUT'`, `fetchCatalog`, `saveModels`,
+		`Models`, `models/fetch`, `models','PUT'`, `fetchCatalog`, `saveModels`,
 		`Authorization`, `Bearer `, `cli-proxy-auth`, `enc::v1::`, `managementKey`, `sessionKey`,
-		`href="/management.html#/auth-files"`, `type="password"`, `<form`, `<table`,
+		`href="/management.html#/auth-files"`, `type="password"`, `<form`,
 		`name="plan"`, `name="priority_override"`, `min="1"`, `max="10"`,
-		`Round-robin`, `Fill-first`, `Effective priority`, `<th>Action</th>`, `colSpan=7`,
+		`Round-robin`, `Fill-first`,
 		`setAttribute('aria-label',`, `Edit routing for ${account.filename}`, `Save routing for ${account.filename}`,
-		`button.onclick=()=>{`, `lockAccountActions(button)`, `lockAccountActions(null)`, `unlockAccountActions()`,
+		`lockAccountActions(opener)`, `lockAccountActions(null)`, `unlockAccountActions()`, `opener.focus()`,
+		`function accountStatus(account)`, `function accountTitle(account)`,
+		`document.createElement('article')`, `card.className='account-card'`,
+		`routingButton.textContent='Routing'`, `modelsButton.textContent='Models'`,
+		`editor.className='account-editor'`, `managementAccess.open=true`, `sessionKey.focus()`,
+		`button.secondary:hover:not(:disabled)`, `button.primary:hover:not(:disabled)`,
 	} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("page missing %q", want)
