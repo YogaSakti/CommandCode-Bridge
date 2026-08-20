@@ -181,6 +181,7 @@ func fingerprint(apiKey string) string {
 
 func credentialAuthData(value credential) pluginapi.AuthData {
 	fingerprint := fingerprint(value.APIKey)
+	filename := pluginID + "-" + fingerprint + ".json"
 	storage, _ := json.Marshal(value)
 	metadata := map[string]any{"type": pluginID, "plan": value.Plan, "priority": value.Priority}
 	if value.PriorityOverride != nil {
@@ -188,8 +189,8 @@ func credentialAuthData(value credential) pluginapi.AuthData {
 	}
 	return pluginapi.AuthData{
 		Provider:    pluginID,
-		ID:          pluginID + "-" + fingerprint,
-		FileName:    pluginID + "-" + fingerprint + ".json",
+		ID:          filename,
+		FileName:    filename,
 		Label:       value.Label,
 		StorageJSON: storage,
 		Metadata:    metadata,

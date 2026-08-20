@@ -139,7 +139,7 @@ func TestAuthParseAcceptsAliasesAndCanonicalizesStorage(t *testing.T) {
 			}
 			auth := response.Auth
 			wantFingerprint := fingerprint(key)
-			if auth.Provider != "commandcode-bridge" || auth.ID != "commandcode-bridge-"+wantFingerprint || auth.FileName != "commandcode-bridge-"+wantFingerprint+".json" {
+			if auth.Provider != "commandcode-bridge" || auth.ID != "commandcode-bridge-"+wantFingerprint+".json" || auth.FileName != "commandcode-bridge-"+wantFingerprint+".json" {
 				t.Fatalf("auth identity = %#v", auth)
 			}
 			if auth.Label != "Primary" || auth.Metadata["type"] != "commandcode-bridge" || auth.Metadata["plan"] != "unspecified" || auth.Metadata["priority"] != float64(0) || auth.Attributes["priority"] != "0" {
@@ -233,7 +233,7 @@ func TestAuthRefreshReturnsCanonicalCredential(t *testing.T) {
 	raw := mustHandle(t, pluginabi.MethodAuthRefresh, pluginapi.AuthRefreshRequest{StorageJSON: storage})
 	var response pluginapi.AuthRefreshResponse
 	decodeResult(t, raw, &response)
-	if response.Auth.Provider != pluginID || response.Auth.ID != pluginID+"-"+fingerprint("user_refresh") || response.Auth.Metadata["plan"] != "go" || response.Auth.Metadata["priority"] != float64(7) || response.Auth.Attributes["priority"] != "7" {
+	if response.Auth.Provider != pluginID || response.Auth.ID != pluginID+"-"+fingerprint("user_refresh")+".json" || response.Auth.Metadata["plan"] != "go" || response.Auth.Metadata["priority"] != float64(7) || response.Auth.Attributes["priority"] != "7" {
 		t.Fatalf("response = %#v", response)
 	}
 	if strings.Contains(string(response.Auth.StorageJSON), "extra") {
