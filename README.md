@@ -107,6 +107,10 @@ Supported input covers text messages, function tools and tool results, reasoning
 
 Model discovery first asks Command Code's public catalog through CPA host transport. Failure falls back to the bundled snapshot.
 
+## Usage accounting
+
+The plugin returns the full OpenAI `usage` object (prompt, completion, total, cached, and reasoning tokens) on the terminal streaming chunk when `stream_options.include_usage` is set, and in every non-streaming response. CPA's plugin-executor path does not currently forward that usage into the usage queue or CPAMP usage events, so requests through this plugin are not shown in CPAMP usage dashboards. This is a CPA host limitation tracked upstream at https://github.com/router-for-me/CLIProxyAPI/issues/5122; it is not a plugin defect.
+
 ## Security
 
 All upstream HTTP and auth persistence operations cross CPA host callbacks; the plugin has no custom network client. The browser resource is static, same-origin, dependency-free, and read-only on its public GET route. Account list/add/import/validate calls use authenticated `/v0/management/plugins/commandcode-bridge/...` routes. The plugin list exposes only redacted routing state and filename; no auth index, key, raw JSON, or path reaches the browser.
