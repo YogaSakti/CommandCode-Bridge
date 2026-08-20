@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/json"
 	"errors"
@@ -231,6 +232,13 @@ func runExecutorStreamWorker(request executorRPCRequest, upstream *upstreamHTTPS
 }
 
 func emitDownstream(streamID string, payload []byte) error {
+	payload = bytes.TrimSpace(payload)
+	if bytes.Equal(payload, []byte("data: [DONE]")) {
+		return nil
+	}
+	if bytes.HasPrefix(payload, []byte("data:")) {
+		payload = bytes.TrimSpace(payload[len("data:"):])
+	}
 	return hostCall(pluginabi.MethodHostStreamEmit, hostStreamEmitRequest{StreamID: streamID, Payload: payload}, &struct{}{})
 }
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -161,7 +162,7 @@ func TestExecutorHTTPRequestEnforcesModelSet(t *testing.T) {
 		raw := mustHandle(t, pluginabi.MethodExecutorHTTPRequest, executorHTTPRPCRequest{
 			ExecutorHTTPRequest: pluginapi.ExecutorHTTPRequest{
 				Method: http.MethodPost, URL: "https://api.commandcode.ai/provider/v1/chat/completions",
-				Body: []byte(`{"model":"gpt-5.5"}`),
+				Body:        []byte(`{"model":"gpt-5.5"}`),
 				StorageJSON: mustJSON(t, map[string]any{"type": pluginID, "api_key": "user_http_models", "models": []any{map[string]any{"name": "deepseek/deepseek-v4-pro"}}}),
 			},
 		})
@@ -189,7 +190,7 @@ func TestExecutorHTTPRequestEnforcesModelSet(t *testing.T) {
 		raw := mustHandle(t, pluginabi.MethodExecutorHTTPRequest, executorHTTPRPCRequest{
 			ExecutorHTTPRequest: pluginapi.ExecutorHTTPRequest{
 				Method: http.MethodPost, URL: "https://api.commandcode.ai/provider/v1/chat/completions",
-				Body: []byte(`{"model":"cc-pro"}`),
+				Body:        []byte(`{"model":"cc-pro"}`),
 				StorageJSON: mustJSON(t, map[string]any{"type": pluginID, "api_key": "user_http_alias", "models": []any{map[string]any{"name": "deepseek/deepseek-v4-pro", "alias": "cc-pro"}}}),
 			},
 		})
@@ -282,8 +283,24 @@ func TestExecutorStreamEmitsAndClosesBothStreams(t *testing.T) {
 	waitForWorkers(t)
 	assertCallCount(t, script, pluginabi.MethodHostHTTPStreamClose, 1)
 	assertCallCount(t, script, pluginabi.MethodHostStreamClose, 1)
-	if countCalls(script, pluginabi.MethodHostStreamEmit) < 2 {
+	script.mu.Lock()
+	var payloads [][]byte
+	for _, call := range script.calls {
+		if call.Method == pluginabi.MethodHostStreamEmit {
+			payloads = append(payloads, append([]byte(nil), call.Request.(hostStreamEmitRequest).Payload...))
+		}
+	}
+	script.mu.Unlock()
+	if len(payloads) < 2 {
 		t.Fatalf("emit calls = %#v", script.calls)
+	}
+	for _, payload := range payloads {
+		if bytes.HasPrefix(payload, []byte("data:")) {
+			t.Fatalf("host stream emit payload must be raw JSON, got %q", payload)
+		}
+		if !json.Valid(payload) {
+			t.Fatalf("host stream emit payload must be JSON, got %q", payload)
+		}
 	}
 	closeRequest := firstCall(t, script, pluginabi.MethodHostStreamClose).Request.(hostStreamCloseRequest)
 	if closeRequest.StreamID != "downstream-1" || closeRequest.Error != "" {
