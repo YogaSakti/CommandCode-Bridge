@@ -109,7 +109,7 @@ Model discovery first asks Command Code's public catalog through CPA host transp
 
 ## Usage accounting
 
-The plugin returns the full OpenAI `usage` object (prompt, completion, total, cached, and reasoning tokens) on the terminal streaming chunk when `stream_options.include_usage` is set, and in every non-streaming response. CPA's plugin-executor path does not currently forward that usage into the usage queue or CPAMP usage events, so requests through this plugin are not shown in CPAMP usage dashboards. This is a CPA host limitation tracked upstream at https://github.com/router-for-me/CLIProxyAPI/issues/5122; it is not a plugin defect.
+The plugin returns the full OpenAI `usage` object (prompt, completion, total, cached, and reasoning tokens) on the terminal streaming chunk when `stream_options.include_usage` is set, and in every non-streaming response. CPA v7.2.138 and later record plugin-executor usage in the usage queue and CPAMP dashboards (fixed upstream in https://github.com/router-for-me/CLIProxyAPI/issues/5122). On CPA v7.2.137 and earlier, responses still contain correct usage but the host does not record it.
 
 ## Security
 
